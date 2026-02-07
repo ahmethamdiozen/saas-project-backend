@@ -6,8 +6,8 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.db.base import Base
-from app.modules.users.models import User
 from app.modules.subscriptions.models import Subscription, UserSubscription
+from app.modules.users.models import User
 from app.modules.jobs.models import Job, JobResult
 from app.core.config import settings
 
