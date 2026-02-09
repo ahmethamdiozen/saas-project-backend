@@ -3,6 +3,9 @@ from passlib.context import CryptContext
 from datetime import datetime, timedelta, timezone
 from jose import jwt
 from app.core.config import settings
+import secrets
+import hashlib
+import hmac
 
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = "HS256"
@@ -42,3 +45,13 @@ def decode_token(token:str) -> dict:
         SECRET_KEY,
         algorithms=[ALGORITHM],
     )
+
+def generate_refresh_token() -> str:
+    return secrets.token_urlsafe(32)
+
+def hash_refresh_token(token: str) -> str:
+    return hmac.new(
+        key=SECRET_KEY.encode(),
+        msg=token.encode(),
+        digestmod=hashlib.sha256
+    ).hexdigest()

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from app.modules.auth.schemas import UserCreate, UserRead, LoginRequest, TokenResponse
 from app.modules.auth.service import register_user, login_user
@@ -31,14 +31,25 @@ def register(
 @router.post("/login", response_model=TokenResponse)
 def login(
     payload: LoginRequest,
+    response: Response,
     db: Session = Depends(get_db)
 ):
     try:
-        token = login_user(
+        access_token, refresh_token = login_user(
             db=db,
             email=payload.email,
             password=payload.password
         )
-        return {"access_token": token}
+
+        response.set_cookie(
+            key="refresh_token",
+            value=refresh_token,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=60 * 60 * 24 * 30
+        ) 
+        return {"access_token": access_token}
+    
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))

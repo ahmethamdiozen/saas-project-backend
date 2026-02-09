@@ -22,6 +22,12 @@ class User(Base):
         nullable=False
     )
 
+    refresh_tokens = relationship(
+        "RefreshToken", 
+        back_populates="refresh_tokens",
+        cascade="all, delete-orphan"
+        )
+
     password_hash: Mapped[str] = mapped_column(nullable=False)
     role: Mapped[str] = mapped_column(default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
