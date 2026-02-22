@@ -24,7 +24,7 @@ class User(Base):
 
     refresh_tokens = relationship(
         "RefreshToken", 
-        back_populates="refresh_tokens",
+        back_populates="user",
         cascade="all, delete-orphan"
         )
 

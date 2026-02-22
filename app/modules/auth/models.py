@@ -40,7 +40,7 @@ class RefreshToken(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        datetime(timezone=True),
+        DateTime(timezone=True),
         default= lambda: datetime.now(timezone.utc),
         nullable=False
     )

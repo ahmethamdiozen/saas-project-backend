@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from app.modules.auth.schemas import UserCreate, UserRead, LoginRequest, TokenResponse
-from app.modules.auth.service import register_user, login_user
+from app.modules.auth.service import register_user, login_user, refresh_access_token
 from app.db.session import SessionLocal
+from app.modules.auth.dependencies import get_refresh_token_from_cookie
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -53,3 +54,21 @@ def login(
     
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
+    
+@router.post("refresh", response_model=TokenResponse)
+def refresh(
+    refresh_token: str = Depends(get_refresh_token_from_cookie),
+    db: Session = Depends(get_db)
+):
+    try:
+        new_access_token = refresh_access_token(
+            db,
+            raw_refresh_token=refresh_token
+        )
+        return {"access_token": new_access_token}
+    
+    except ValueError:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid refresh token"
+        )

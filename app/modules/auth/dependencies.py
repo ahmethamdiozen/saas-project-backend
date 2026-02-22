@@ -1,4 +1,4 @@
-from fastapi import HTTPException, status, Depends
+from fastapi import HTTPException, status, Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from jose import JWTError
@@ -22,7 +22,7 @@ def get_current_user(
 ):
     try:
         payload = decode_token(token)
-        user_id = str | None = payload.get("sub")
+        user_id : str | None = payload.get("sub")
         if user_id is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -43,3 +43,14 @@ def get_current_user(
         )
     
     return user
+
+def get_refresh_token_from_cookie(request: Request) -> str:
+    token = request.cookies.get("refresh_token")
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing refresh token",
+        )
+    
+    return token
