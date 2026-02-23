@@ -55,7 +55,7 @@ def login(
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
     
-@router.post("refresh", response_model=TokenResponse)
+@router.post("/refresh", response_model=TokenResponse)
 def refresh(
     refresh_token: str = Depends(get_refresh_token_from_cookie),
     db: Session = Depends(get_db)
