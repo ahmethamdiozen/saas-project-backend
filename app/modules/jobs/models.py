@@ -5,6 +5,15 @@ from datetime import datetime, timezone
 import uuid
 
 from app.db.base import Base
+from enum import Enum
+
+class JobStatus(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+
+
 
 class Job(Base):
     __tablename__ = "jobs"
@@ -22,15 +31,26 @@ class Job(Base):
         index=True
     )
 
-    status: Mapped[str] = mapped_column(String, index=True)
+    status: Mapped[JobStatus] = mapped_column(
+        String, 
+        default=JobStatus.PENDING.value, 
+        index=True
+    )
+
     job_type: Mapped[str] = mapped_column(String)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc)
     )
-    started_at: Mapped[datetime | None]
-    finished_at: Mapped[datetime | None]
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
 
     user = relationship("User", back_populates="jobs")
     result = relationship("JobResult", back_populates="job", uselist=False)
