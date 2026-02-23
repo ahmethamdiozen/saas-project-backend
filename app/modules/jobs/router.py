@@ -1,22 +1,25 @@
 from fastapi import APIRouter, HTTPException
 from uuid import uuid4
-from app.modules.jobs.service import enqueue_job
+from app.modules.jobs.service import create_job
 from fastapi import Depends
 from sqlalchemy.orm import Session
 from app.modules.auth.router import get_db
 from app.modules.jobs.models import Job
+from app.modules.auth.dependencies import get_current_user
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 @router.post("/")
-def create_job():
-    job_id = str(uuid4())
+def create_job_endpoint(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    job: Job = create_job(db, current_user.id)
 
-    enqueue_job(job_id)
     
     return {
-        "job_id": job_id,
-        "status": "queued"
+        "job_id": str(job.id),
+        "status": job.status
     }
 
 @router.get("/{job_id}")
