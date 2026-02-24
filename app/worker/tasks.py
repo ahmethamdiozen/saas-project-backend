@@ -8,12 +8,14 @@ from app.worker.locks import acquire_job_lock, release_job_lock
 
 def process_job(job_id: str):
 
+    #distributed lock
     if not acquire_job_lock(job_id):
         print(f"Job {job_id} already running elsewhere")
         return
 
     db: Session = SessionLocal()
 
+    #job load
     job = db.query(Job).filter(Job.id == job_id).first()
 
     if not job:
@@ -21,20 +23,26 @@ def process_job(job_id: str):
         return
     
     try:
-        # RUNNING
 
+        #idempotency guard
+        if job.status in (JobStatus.SUCCESS.value, JobStatus.FAILED.value):
+            print(f"Job {job_id} already finished. Skipping.")
+            return
+
+        #mark RUNNING
         job.status = JobStatus.RUNNING.value
         job.started_at = datetime.now(timezone.utc)
         job.finished_at = None
         db.commit()
 
+        #execution
         time.sleep(10)
 
         result_payload = {
             "answer": 42
         }
 
-        # RESULT RECORD
+        #upsert(update and insert) result (idempotent)
 
         existing_result = (
             db.query(JobResult)
@@ -50,7 +58,7 @@ def process_job(job_id: str):
                 result_data=result_payload
             ))
 
-        # SUCCESS
+        # if SUCCESS
 
         job.status = JobStatus.SUCCESS.value
         job.finished_at = datetime.now(timezone.utc)
@@ -58,8 +66,11 @@ def process_job(job_id: str):
 
          # FAILED
     except Exception as e:
+
+        #rollback failed transaction
         db.rollback()
 
+        #upsert error result
         existing_result = (
             db.query(JobResult)
             .filter(JobResult.job_id == job.id)
@@ -82,5 +93,6 @@ def process_job(job_id: str):
 
 
     finally:
+        #always release lock
         release_job_lock(job_id)
         db.close()

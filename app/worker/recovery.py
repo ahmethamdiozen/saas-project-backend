@@ -10,6 +10,7 @@ from app.worker.redis_queue import job_queue
 from app.worker.tasks import process_job
 
 STUCK_THRESHOLD_SECONDS = 360
+MAX_RECOVERY_ATTEMPTS = 3
 
 def recover_stuck_jobs():
     db: Session = SessionLocal()
@@ -27,12 +28,21 @@ def recover_stuck_jobs():
         )
 
         for job in stuck_jobs:
+
             print(f"Recovering stuck job {job.id}")
 
+            #recovery limit guard
+            if job.recovery_attempts >= MAX_RECOVERY_ATTEMPTS:
+                print(f"Job {job.id} exceeded max recovery attempts")
+                continue
+
+            #mark FAILED
             job.status = JobStatus.FAILED.value
             job.finished_at = datetime.now(timezone.utc)
+            job.recovery_attempts += 1
             db.commit()
-
+            
+            #requeue new execution
             job_queue.enqueue(process_job, str(job.id))
     
     finally:

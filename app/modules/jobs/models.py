@@ -1,4 +1,4 @@
-from sqlalchemy import String, DateTime, ForeignKey, Text
+from sqlalchemy import String, DateTime, ForeignKey, Text, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from datetime import datetime, timezone
@@ -25,7 +25,7 @@ class Job(Base):
     )
 
     user = relationship("User", back_populates="jobs")
-    
+
     result = relationship("JobResult", back_populates="job", uselist=False)
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -39,6 +39,12 @@ class Job(Base):
         String, 
         default=JobStatus.PENDING.value, 
         index=True
+    )
+
+    recovery_attempts: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
     )
 
     job_type: Mapped[str] = mapped_column(String)
