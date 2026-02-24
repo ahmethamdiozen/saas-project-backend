@@ -24,6 +24,10 @@ class Job(Base):
         default=uuid.uuid4
     )
 
+    user = relationship("User", back_populates="jobs")
+    
+    result = relationship("JobResult", back_populates="job", uselist=False)
+
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id"),
@@ -52,9 +56,6 @@ class Job(Base):
         nullable=True
     )
 
-    user = relationship("User", back_populates="jobs")
-    result = relationship("JobResult", back_populates="job", uselist=False)
-
 class JobResult(Base):
     __tablename__ = "job_results"
 
@@ -63,6 +64,8 @@ class JobResult(Base):
         primary_key=True,
         default=uuid.uuid4
     )
+
+    job = relationship("Job", back_populates="result")
 
     job_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -78,5 +81,3 @@ class JobResult(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc)
     )
-
-    job = relationship("Job", back_populates="result")
