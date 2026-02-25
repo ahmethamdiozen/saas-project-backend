@@ -112,7 +112,7 @@ class JobExecution(Base):
 
     attemt_number: Mapped[int] = mapped_column(Integer)
 
-    status: Mapped[str] = mapped_column(String)
+    status: Mapped[JobStatus] = mapped_column(String)
 
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

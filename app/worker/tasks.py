@@ -3,7 +3,7 @@ import time
 
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
-from app.modules.jobs.models import Job, JobResult, JobStatus
+from app.modules.jobs.models import Job, JobResult, JobStatus, JobExecution
 from app.worker.locks import acquire_job_lock, release_job_lock
 
 def process_job(job_id: str):
@@ -28,6 +28,19 @@ def process_job(job_id: str):
         if job.status in (JobStatus.SUCCESS.value, JobStatus.FAILED.value):
             print(f"Job {job_id} already finished. Skipping.")
             return
+        
+        # define execution attempt
+        attempt_number = len(job.executions) + 1
+
+        execution = JobExecution(
+            job_id = job.id,
+            attempt_number=attempt_number,
+            status=JobStatus.RUNNING.value
+        )
+
+        db.add(execution)
+        db.commit()
+        db.refresh(execution)
 
         #mark RUNNING
         job.status = JobStatus.RUNNING.value
@@ -58,6 +71,11 @@ def process_job(job_id: str):
                 result_data=result_payload
             ))
 
+        # execution success
+        execution.status = JobStatus.SUCCESS.value
+        execution.finished_at = datetime.now(timezone.utc)
+        db.commit()
+
         # if SUCCESS
 
         job.status = JobStatus.SUCCESS.value
@@ -66,6 +84,11 @@ def process_job(job_id: str):
 
          # FAILED
     except Exception as e:
+
+        execution.status = JobStatus.FAILED.value
+        execution.error_message = str(e)
+        execution.finished_at = datetime.now(timezone.utc)
+        db.commit()
 
         #rollback failed transaction
         db.rollback()
