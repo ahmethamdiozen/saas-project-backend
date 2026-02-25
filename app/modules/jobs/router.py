@@ -4,7 +4,7 @@ from app.modules.jobs.service import create_job
 from fastapi import Depends
 from sqlalchemy.orm import Session
 from app.modules.auth.router import get_db
-from app.modules.jobs.models import Job
+from app.modules.jobs.models import Job, JobExecution
 from app.modules.auth.dependencies import get_current_user
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -29,6 +29,13 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(404, "Job not found")
     
+    latest_execution = (
+        db.query(JobExecution)
+        .filter(JobExecution.job_id == job.id)
+        .order_by(JobExecution.attempt_number.desc())
+        .first()
+    )  
+
     result_data = None
     error = None
 
@@ -41,7 +48,14 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
         "status": job.status,
         "result": result_data,
         "error": error,
-        "created_at": job.created_at,
-        "started_at": job.started_at,
-        "finished_at": job.finished_at
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "execution": {
+            "attempt_number": latest_execution.attempt_number,
+            "status": latest_execution.status,
+            "progress": latest_execution.progress,
+            "current_step": latest_execution.current_step,
+            "duration_seconds": latest_execution.duration_seconds,
+        } if latest_execution else None
     }

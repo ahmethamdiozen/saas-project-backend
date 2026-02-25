@@ -1,4 +1,4 @@
-from sqlalchemy import String, DateTime, ForeignKey, Text, Integer
+from sqlalchemy import String, DateTime, ForeignKey, Text, Integer, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from datetime import datetime, timezone
@@ -112,6 +112,10 @@ class JobExecution(Base):
 
     attemt_number: Mapped[int] = mapped_column(Integer)
 
+    progess: Mapped[int] = mapped_column(Integer, default=0)
+
+    current_step: Mapped[str | None] = mapped_column(String)
+
     status: Mapped[JobStatus] = mapped_column(String)
 
     started_at: Mapped[datetime] = mapped_column(
@@ -120,6 +124,8 @@ class JobExecution(Base):
     )
 
     finished_at: Mapped[datetime | None]
+
+    duration_seconds: Mapped[float | None] = mapped_column(Float)
 
     error_message: Mapped[str | None] = mapped_column(Text)
 

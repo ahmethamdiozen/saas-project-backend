@@ -6,6 +6,8 @@ from app.db.session import SessionLocal
 from app.modules.jobs.models import Job, JobResult, JobStatus, JobExecution
 from app.worker.locks import acquire_job_lock, release_job_lock
 
+SLOW_EXECUTION_THRESHOLD = 5
+
 def process_job(job_id: str):
 
     #distributed lock
@@ -48,6 +50,29 @@ def process_job(job_id: str):
         job.finished_at = None
         db.commit()
 
+        # STEP 1
+        execution.current_step = "loading_data"
+        execution.progress = 20
+        db.commit()
+        time.sleep(2)
+
+        # STEP 2
+        execution.current_step = "processing_data"
+        execution.progress = 50
+        db.commit()
+        time.sleep(2)
+
+        # STEP 3
+        execution.current_step = "finalizing"
+        execution.progress = 80
+        db.commit()
+        time.sleep(2)
+
+        # STEP 4
+        execution.current_step = "completed"
+        execution.progress = 100
+        db.commit()
+
         #execution
         time.sleep(10)
 
@@ -74,6 +99,11 @@ def process_job(job_id: str):
         # execution success
         execution.status = JobStatus.SUCCESS.value
         execution.finished_at = datetime.now(timezone.utc)
+        execution.duration_seconds = (
+            execution.finished_at - execution.started_at
+        ).total_seconds
+        if execution.duration_seconds > SLOW_EXECUTION_THRESHOLD:
+            print(f"SLOW EXECUTION: job{job.id} duration{execution.duration_seconds}")
         db.commit()
 
         # if SUCCESS
@@ -88,6 +118,11 @@ def process_job(job_id: str):
         execution.status = JobStatus.FAILED.value
         execution.error_message = str(e)
         execution.finished_at = datetime.now(timezone.utc)
+        execution.duration_seconds = (
+            execution.finished_at - execution.started_at
+        ).total_seconds
+        if execution.duration_seconds > SLOW_EXECUTION_THRESHOLD:
+            print(f"SLOW EXECUTION: job={job.id} duration={execution.duration_seconds}")
         db.commit()
 
         #rollback failed transaction
