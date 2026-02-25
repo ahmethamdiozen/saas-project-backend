@@ -28,6 +28,12 @@ class Job(Base):
 
     result = relationship("JobResult", back_populates="job", uselist=False)
 
+    executions = relationship(
+        "JobExecution",
+        back_populates="job",
+        cascade="all, delete-orphan"
+    )
+
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id"),
@@ -87,3 +93,34 @@ class JobResult(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc)
     )
+
+class JobExecution(Base):
+    __tablename__ = "job_executions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4    
+    )
+
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("jobs.id"),
+        nullable=False,
+        index=True
+    )
+
+    attemt_number: Mapped[int] = mapped_column(Integer)
+
+    status: Mapped[str] = mapped_column(String)
+
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    finished_at: Mapped[datetime | None]
+
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    job = relationship("Job", back_populates="executions")
