@@ -4,3 +4,4 @@ psycopg2-binary
 fastapi
 pydantic-settings
 pydantic
+rq

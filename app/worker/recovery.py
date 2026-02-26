@@ -29,12 +29,15 @@ def recover_stuck_jobs():
 
         for job in stuck_jobs:
 
-            print(f"Recovering stuck job {job.id}")
-
             #recovery limit guard
-            if job.recovery_attempts >= MAX_RECOVERY_ATTEMPTS:
+            if job.recovery_attempts >= job.max_retries:
                 print(f"Job {job.id} exceeded max recovery attempts")
+                job.status = JobStatus.FAILED.value
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
                 continue
+
+            print(f"Recovering stuck job {job.id}")
 
             #mark FAILED
             job.status = JobStatus.FAILED.value

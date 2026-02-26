@@ -29,6 +29,13 @@ def process_job(job_id: str):
         if not job:
             db.close()
             return
+        
+        if job.recovery_attempts >= job.max_retries:
+            print(f"Job {job.id} exceeded max retries")
+            job.status = JobStatus.FAILED.value
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return
 
         #idempotency guard
         if job.status in (JobStatus.SUCCESS.value, JobStatus.FAILED.value):

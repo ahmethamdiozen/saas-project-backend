@@ -47,11 +47,18 @@ class Job(Base):
         index=True
     )
 
+    max_retries: Mapped[int] = mapped_column(
+        Integer,
+        default=3,
+        nullable=False
+    )
+
     recovery_attempts: Mapped[int] = mapped_column(
         Integer,
         default=0,
         nullable=False
     )
+
 
     job_type: Mapped[str] = mapped_column(String)
 
@@ -79,7 +86,7 @@ class JobResult(Base):
 
     job = relationship("Job", back_populates="result")
 
-    job_id: Mapped[uuid.UUID] | Mapped[str] = mapped_column(
+    job_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("jobs.id"),
         unique=True,
@@ -103,7 +110,7 @@ class JobExecution(Base):
         default=uuid.uuid4    
     )
 
-    job_id: Mapped[uuid.UUID] | Mapped[str] = mapped_column(
+    job_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("jobs.id"),
         nullable=False,
