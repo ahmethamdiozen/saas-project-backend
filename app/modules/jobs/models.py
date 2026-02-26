@@ -41,7 +41,7 @@ class Job(Base):
         index=True
     )
 
-    status: Mapped[JobStatus] = mapped_column(
+    status: Mapped[str] = mapped_column(
         String, 
         default=JobStatus.PENDING.value, 
         index=True
@@ -79,7 +79,7 @@ class JobResult(Base):
 
     job = relationship("Job", back_populates="result")
 
-    job_id: Mapped[uuid.UUID] = mapped_column(
+    job_id: Mapped[uuid.UUID] | Mapped[str] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("jobs.id"),
         unique=True,
@@ -103,20 +103,20 @@ class JobExecution(Base):
         default=uuid.uuid4    
     )
 
-    job_id: Mapped[uuid.UUID] = mapped_column(
+    job_id: Mapped[uuid.UUID] | Mapped[str] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("jobs.id"),
         nullable=False,
         index=True
     )
 
-    attemt_number: Mapped[int] = mapped_column(Integer)
+    attempt_number: Mapped[int] = mapped_column(Integer)
 
-    progess: Mapped[int] = mapped_column(Integer, default=0)
+    progress: Mapped[int] = mapped_column(Integer, default=0)
 
     current_step: Mapped[str | None] = mapped_column(String)
 
-    status: Mapped[JobStatus] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
 
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

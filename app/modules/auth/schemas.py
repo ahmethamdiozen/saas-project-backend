@@ -3,16 +3,16 @@ from datetime import datetime
 from pydantic import BaseModel, EmailStr
 
 class UserCreate(BaseModel):
-    email: EmailStr
+    email: EmailStr | str
     password: str
 
 class UserRead(BaseModel):
     id: uuid.UUID
-    email: EmailStr
+    email: EmailStr | str
     created_at: datetime
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: EmailStr | str
     password: str
 
 class TokenResponse(BaseModel):

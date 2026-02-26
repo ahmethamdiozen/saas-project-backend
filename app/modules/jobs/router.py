@@ -9,32 +9,33 @@ from app.modules.auth.dependencies import get_current_user
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
+
 @router.post("/")
 def create_job_endpoint(
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+        db: Session = Depends(get_db),
+        current_user=Depends(get_current_user)
 ):
     job: Job = create_job(db, current_user.id)
 
-    
     return {
         "job_id": str(job.id),
         "status": job.status
     }
 
-@router.get("/{job_id}")
+
+@router.get("/{job_id}/")
 def get_job(job_id: str, db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()
 
     if not job:
         raise HTTPException(404, "Job not found")
-    
+
     latest_execution = (
         db.query(JobExecution)
         .filter(JobExecution.job_id == job.id)
         .order_by(JobExecution.attempt_number.desc())
         .first()
-    )  
+    )
 
     result_data = None
     error = None

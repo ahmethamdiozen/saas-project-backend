@@ -14,21 +14,26 @@ def process_job(job_id: str):
     if not acquire_job_lock(job_id):
         print(f"Job {job_id} already running elsewhere")
         return
-
-    db: Session = SessionLocal()
-
-    #job load
-    job = db.query(Job).filter(Job.id == job_id).first()
-
-    if not job:
-        db.close()
-        return
+    
+    db = None
+    execution = None
+    job = None
     
     try:
+
+        db: Session | None = SessionLocal()
+
+        #job load
+        job = db.query(Job).filter(Job.id == job_id).first()
+
+        if not job:
+            db.close()
+            return
 
         #idempotency guard
         if job.status in (JobStatus.SUCCESS.value, JobStatus.FAILED.value):
             print(f"Job {job_id} already finished. Skipping.")
+            db.close()
             return
         
         # define execution attempt
@@ -37,7 +42,8 @@ def process_job(job_id: str):
         execution = JobExecution(
             job_id = job.id,
             attempt_number=attempt_number,
-            status=JobStatus.RUNNING.value
+            status=JobStatus.RUNNING.value,
+            started_at=datetime.now(timezone.utc)
         )
 
         db.add(execution)
@@ -73,15 +79,11 @@ def process_job(job_id: str):
         execution.progress = 100
         db.commit()
 
-        #execution
-        time.sleep(10)
-
         result_payload = {
             "answer": 42
         }
 
         #upsert(update and insert) result (idempotent)
-
         existing_result = (
             db.query(JobResult)
             .filter(JobResult.job_id == job.id)
@@ -92,7 +94,7 @@ def process_job(job_id: str):
             existing_result.error_message = None
         else:
             db.add(JobResult(
-                job_id=job.id,
+                job_id = job.id,
                 result_data=result_payload
             ))
 
@@ -101,7 +103,7 @@ def process_job(job_id: str):
         execution.finished_at = datetime.now(timezone.utc)
         execution.duration_seconds = (
             execution.finished_at - execution.started_at
-        ).total_seconds
+        ).total_seconds()
         if execution.duration_seconds > SLOW_EXECUTION_THRESHOLD:
             print(f"SLOW EXECUTION: job{job.id} duration{execution.duration_seconds}")
         db.commit()
@@ -114,38 +116,44 @@ def process_job(job_id: str):
 
          # FAILED
     except Exception as e:
-
-        execution.status = JobStatus.FAILED.value
-        execution.error_message = str(e)
-        execution.finished_at = datetime.now(timezone.utc)
-        execution.duration_seconds = (
-            execution.finished_at - execution.started_at
-        ).total_seconds
-        if execution.duration_seconds > SLOW_EXECUTION_THRESHOLD:
-            print(f"SLOW EXECUTION: job={job.id} duration={execution.duration_seconds}")
-        db.commit()
-
         #rollback failed transaction
-        db.rollback()
+        if db:
+            db.rollback()
 
+        if execution:
+            execution.status = JobStatus.FAILED.value
+            execution.error_message = str(e)
+            execution.finished_at = datetime.now(timezone.utc)
+
+            execution.duration_seconds = (
+                execution.finished_at - execution.started_at
+            ).total_seconds()
+
+            if execution.duration_seconds > SLOW_EXECUTION_THRESHOLD:
+                print(f"SLOW EXECUTION: job={job.id} duration={execution.duration_seconds}")
+
+        if db:
+            db.commit()
+
+        if db and job:
         #upsert error result
-        existing_result = (
-            db.query(JobResult)
-            .filter(JobResult.job_id == job.id)
-            .first()
-        )
+            existing_result = (
+                db.query(JobResult)
+                .filter(JobResult.job_id == job.id)
+                .first()
+            )
 
-        if existing_result:
-            existing_result.error_message = str(e)
-        else:
-            db.add(JobResult(
-                job_id=job.id,
-                error_message=str(e)
-            ))
+            if existing_result:
+                existing_result.error_message = str(e)
+            else:
+                db.add(JobResult(
+                    job_id=job.id,
+                    error_message=str(e)
+                ))
 
-        job.status = JobStatus.FAILED.value
-        job.finished_at = datetime.now(timezone.utc)
-        db.commit()
+            job.status = JobStatus.FAILED.value
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
     
         raise
 
@@ -153,4 +161,5 @@ def process_job(job_id: str):
     finally:
         #always release lock
         release_job_lock(job_id)
-        db.close()
+        if db is not None:
+            db.close()
