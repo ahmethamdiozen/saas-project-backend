@@ -4,8 +4,10 @@ from app.modules.jobs.service import create_job
 from fastapi import Depends
 from sqlalchemy.orm import Session
 from app.modules.auth.router import get_db
-from app.modules.jobs.models import Job, JobExecution
+from app.modules.jobs.models import Job, JobExecution, JobStatus
+from app.modules.users.models import User
 from app.modules.auth.dependencies import get_current_user
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -60,3 +62,31 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
             "duration_seconds": latest_execution.duration_seconds,
         } if latest_execution else None
     }
+
+@router.post("/{job_id}/cancel")
+def cancel_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user : User  = Depends(get_current_user)
+):
+    job: Job = db.query(Job).filter(Job.id == job_id).first()
+
+    if not job:
+        raise HTTPException(404, "Job not found")
+    
+    # ownership check
+    if job.user_id != current_user.id:
+        raise HTTPException((403, "Not allowed"))
+
+    # only PENDING and RUNNING jobs can be cancelled.
+    if job.status not in (
+                        JobStatus.PENDING.value, 
+                        JobStatus.RUNNING.value):
+        raise HTTPException(400, "Job already finished")
+    
+    job.status = JobStatus.CANCELLED.value
+    job.finished_at = datetime.now(timezone.utc)
+
+    db.commit()
+
+    return {"message": "Job cancelled"}
