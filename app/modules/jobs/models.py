@@ -13,6 +13,7 @@ class JobStatus(str, Enum):
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    TIMEOUT = "TIMEOUT"
 
 
 
@@ -57,6 +58,12 @@ class Job(Base):
     recovery_attempts: Mapped[int] = mapped_column(
         Integer,
         default=0,
+        nullable=False
+    )
+
+    max_execution_seconds: Mapped[int] = mapped_column(
+        Integer,
+        default=300,
         nullable=False
     )
 

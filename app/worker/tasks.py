@@ -135,6 +135,24 @@ def process_job(job_id: str):
         job.finished_at = datetime.now(timezone.utc)
         db.commit()
 
+    except JobCancelledError:
+
+        db.refresh(job)
+
+        if execution:
+            execution.finished_at = datetime.now(timezone.utc)
+            execution.duration_seconds = (
+                execution.finished_at - execution.started_at
+            ).total_seconds()
+
+            if job.status == JobStatus.TIMEOUT.value:
+                execution.status = JobStatus.TIMEOUT.value
+            else:
+                execution.status = JobStatus.CANCELLED.value
+        
+        db.commit()
+        print(f"Job {job_id} cancelled")
+
          # FAILED
     except Exception as e:
         #rollback failed transaction
