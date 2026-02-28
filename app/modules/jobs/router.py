@@ -1,13 +1,15 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from uuid import uuid4
 from app.modules.jobs.service import create_job
 from fastapi import Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 from app.modules.auth.router import get_db
 from app.modules.jobs.models import Job, JobExecution, JobStatus
 from app.modules.users.models import User
 from app.modules.auth.dependencies import get_current_user
 from datetime import datetime, timezone
+from app.modules.jobs.schemas import JobListItem, JobListResponse
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -24,13 +26,60 @@ def create_job_endpoint(
         "status": job.status
     }
 
+@router.get("/", response_model=JobListResponse)
+def list_jobs(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
+    limit: int = Query(default=20, le=100),
+    offset: int = Query(default=0),
+    status: str | None = None
+):
+    query = db.query(Job).filter(Job.user_id == current_user.id)
+
+    if status:
+        query = query.filter(Job.status == status)
+
+    total = query.count()
+
+    jobs = (
+        query
+        .order_by(desc(Job.created_at))
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "total": total,
+        "items": [
+            JobListItem(
+                id=str(job.id),
+                status=job.status,
+                job_type=job.job_type,
+                created_at=job.created_at,
+                started_at=job.started_at,
+                finished_at=job.finished_at
+            )
+            for job in jobs
+        ]
+    }
+
 
 @router.get("/{job_id}/")
-def get_job(job_id: str, db: Session = Depends(get_db)):
-    job = db.query(Job).filter(Job.id == job_id).first()
+def get_job(
+        job_id: str, 
+        db: Session = Depends(get_db), 
+        current_user= Depends(get_current_user)
+):
+    job = (
+        db.query(Job)
+        .filter(Job.id == job_id)
+        .filter(Job.user_id == current_user.id)
+        .first()
+    )
 
     if not job:
-        raise HTTPException(404, "Job not found")
+        raise HTTPException(status_code=404, detail="Job not found")
 
     latest_execution = (
         db.query(JobExecution)
