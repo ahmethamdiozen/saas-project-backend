@@ -5,3 +5,14 @@ fastapi
 pydantic-settings
 pydantic
 rq
+redis
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+openai
+chromadb
+pymupdf
+langchain
+langchain-openai
+langchain-community
+tiktoken

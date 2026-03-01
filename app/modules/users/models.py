@@ -45,3 +45,4 @@ class User(Base):
 
     subscriptions = relationship("UserSubscription", back_populates="user")
     jobs = relationship("Job", back_populates="user")
+    documents = relationship("Document", back_populates="user")

@@ -1,9 +1,13 @@
 from datetime import datetime, timezone
 import time
+import os
 
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
+from app.core.logging import logger
 from app.modules.jobs.models import Job, JobResult, JobStatus, JobExecution
+from app.modules.rag.models import Document
+from app.modules.rag.service import rag_service
 from app.worker.locks import acquire_job_lock, release_job_lock
 from app.worker.cancellation import (
     CancellationToken, 
@@ -13,194 +17,106 @@ from app.worker.cancellation import (
 )
 
 
-SLOW_EXECUTION_THRESHOLD = 5
+SLOW_EXECUTION_THRESHOLD = 30 # RAG can take time
 
 def process_job(job_id: str):
 
     token = CancellationToken()
     register_token(job_id, token)
 
-    #distributed lock
     if not acquire_job_lock(job_id):
-        print(f"Job {job_id} already running elsewhere")
+        logger.warning(f"Job {job_id} already running")
         return
     
     db = None
     execution = None
-    job = None
+    document = None # Pre-initialize to avoid UnboundLocalError
     
     try:
-
-        db: Session | None = SessionLocal()
-
-        #job load
+        db = SessionLocal()
         job = db.query(Job).filter(Job.id == job_id).first()
 
-        if not job:
-            db.close()
+        if not job or job.status in (JobStatus.SUCCESS.value, JobStatus.FAILED.value):
             return
         
-        if job.recovery_attempts >= job.max_retries:
-            print(f"Job {job.id} exceeded max retries")
-            job.status = JobStatus.FAILED.value
-            job.finished_at = datetime.now(timezone.utc)
-            db.commit()
+        # Get associated document from job_metadata
+        doc_id = job.job_metadata.get("document_id") if job.job_metadata else None
+        document = db.query(Document).filter(Document.id == doc_id).first() if doc_id else None
+
+        if not document:
+            logger.error(f"No document found for job {job_id}")
             return
 
-        #idempotency guard
-        if job.status in (JobStatus.SUCCESS.value, JobStatus.FAILED.value):
-            print(f"Job {job_id} already finished. Skipping.")
-            db.close()
-            return
-        
-        # define execution attempt
         attempt_number = len(job.executions) + 1
-
         execution = JobExecution(
             job_id = job.id,
             attempt_number=attempt_number,
             status=JobStatus.RUNNING.value,
             started_at=datetime.now(timezone.utc)
         )
-
         db.add(execution)
         db.commit()
-        db.refresh(execution)
 
-        #mark RUNNING
         job.status = JobStatus.RUNNING.value
         job.started_at = datetime.now(timezone.utc)
-        job.finished_at = None
         db.commit()
 
+        # --- RAG PIPELINE ---
+        
         token.raise_if_cancelled()
-        # STEP 1
-        execution.current_step = "loading_data"
+        # STEP 1: Extraction
+        execution.current_step = "extracting_text"
         execution.progress = 20
         db.commit()
-        time.sleep(2)
-
-        token.raise_if_cancelled()
-        # STEP 2
-        execution.current_step = "processing_data"
-        execution.progress = 50
+        
+        # We perform actual extraction
+        pages_content = rag_service.extract_text_from_pdf(document.file_path)
+        document.page_count = len(pages_content)
         db.commit()
-        time.sleep(2)
 
         token.raise_if_cancelled()
-        # STEP 3
+        # STEP 2: Chunking & Embedding
+        execution.current_step = "generating_embeddings"
+        execution.progress = 60
+        db.commit()
+        
+        # This will store in ChromaDB
+        rag_service.process_document(document.file_path, str(document.id), str(job.user_id))
+
+        token.raise_if_cancelled()
+        # STEP 3: Finalizing
         execution.current_step = "finalizing"
-        execution.progress = 80
-        db.commit()
-        time.sleep(2)
-
-        token.raise_if_cancelled()
-        # STEP 4
-        execution.current_step = "completed"
-        execution.progress = 100
+        execution.progress = 90
         db.commit()
 
-        result_payload = {
-            "answer": 42
-        }
-
-        #upsert(update and insert) result (idempotent)
-        existing_result = (
-            db.query(JobResult)
-            .filter(JobResult.job_id == job.id)
-            .first()
-        )
-        if existing_result:
-            existing_result.result_data = result_payload
-            existing_result.error_message = None
-        else:
-            db.add(JobResult(
-                job_id = job.id,
-                result_data=result_payload
-            ))
-
-        # execution success
+        # Success
         execution.status = JobStatus.SUCCESS.value
+        execution.progress = 100
         execution.finished_at = datetime.now(timezone.utc)
-        execution.duration_seconds = (
-            execution.finished_at - execution.started_at
-        ).total_seconds()
-        if execution.duration_seconds > SLOW_EXECUTION_THRESHOLD:
-            print(f"SLOW EXECUTION: job{job.id} duration{execution.duration_seconds}")
-        db.commit()
-
-        # if SUCCESS
-
+        execution.duration_seconds = (execution.finished_at - execution.started_at).total_seconds()
+        
+        document.status = "ready"
         job.status = JobStatus.SUCCESS.value
         job.finished_at = datetime.now(timezone.utc)
-        db.commit()
-
-    except JobCancelledError:
-
-        db.refresh(job)
-
-        if execution:
-            execution.finished_at = datetime.now(timezone.utc)
-            execution.duration_seconds = (
-                execution.finished_at - execution.started_at
-            ).total_seconds()
-
-            if job.status == JobStatus.TIMEOUT.value:
-                execution.status = JobStatus.TIMEOUT.value
-            else:
-                execution.status = JobStatus.CANCELLED.value
         
         db.commit()
-        print(f"Job {job_id} cancelled")
+        logger.info(f"RAG processing complete for document {document.id}")
 
-         # FAILED
     except Exception as e:
-        #rollback failed transaction
+        logger.error(f"RAG Job failed: {str(e)}", exc_info=True)
         if db:
             db.rollback()
-
-        if execution:
-            execution.status = JobStatus.FAILED.value
-            execution.error_message = str(e)
-            execution.finished_at = datetime.now(timezone.utc)
-
-            execution.duration_seconds = (
-                execution.finished_at - execution.started_at
-            ).total_seconds()
-
-            if execution.duration_seconds > SLOW_EXECUTION_THRESHOLD:
-                print(f"SLOW EXECUTION: job={job.id} duration={execution.duration_seconds}")
-
-        if db:
+            if execution:
+                execution.status = JobStatus.FAILED.value
+                execution.error_message = str(e)
+                execution.finished_at = datetime.now(timezone.utc)
+            if job:
+                job.status = JobStatus.FAILED.value
+            if document:
+                document.status = "error"
             db.commit()
-
-        if db and job:
-        #upsert error result
-            existing_result = (
-                db.query(JobResult)
-                .filter(JobResult.job_id == job.id)
-                .first()
-            )
-
-            if existing_result:
-                existing_result.error_message = str(e)
-            else:
-                db.add(JobResult(
-                    job_id=job.id,
-                    error_message=str(e)
-                ))
-
-            job.status = JobStatus.FAILED.value
-            job.finished_at = datetime.now(timezone.utc)
-            db.commit()
-    
         raise
-
-
     finally:
-        #always release lock
         release_job_lock(job_id)
-        if db is not None:
-            db.close()
-        
+        if db: db.close()
         unregister_token(job_id)

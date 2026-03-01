@@ -4,14 +4,14 @@ from app.modules.jobs.service import create_job
 from fastapi import Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-from app.modules.auth.router import get_db
+from app.db.session import get_db
 from app.modules.jobs.models import Job, JobExecution, JobStatus
 from app.modules.users.models import User
 from app.modules.auth.dependencies import get_current_user
 from datetime import datetime, timezone
 from app.modules.jobs.schemas import JobListItem, JobListResponse
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter()
 
 
 @router.post("/")
@@ -19,12 +19,15 @@ def create_job_endpoint(
         db: Session = Depends(get_db),
         current_user=Depends(get_current_user)
 ):
-    job: Job = create_job(db, current_user.id)
-
-    return {
-        "job_id": str(job.id),
-        "status": job.status
-    }
+    try:
+        job: Job = create_job(db, current_user.id)
+        return {
+            "job_id": str(job.id),
+            "status": job.status
+        }
+    except ValueError as e:
+        # 402 Payment Required is standard for subscription limits
+        raise HTTPException(status_code=402, detail=str(e))
 
 @router.get("/", response_model=JobListResponse)
 def list_jobs(

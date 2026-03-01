@@ -14,6 +14,10 @@ from app.modules.auth.repository import (
     create_refresh_token,
     get_valid_refresh_token
 )
+from app.modules.subscriptions.service import (
+    get_or_create_free_tier,
+    assign_subscription_to_user
+)
 
 def register_user(db: Session, *, email: str, password: str):
     existing_user = get_user_by_email(db, email)
@@ -28,6 +32,10 @@ def register_user(db: Session, *, email: str, password: str):
         email=email,
         password_hash=password_hash
     )
+
+    # Automatically assign a free subscription tier to new users
+    free_tier = get_or_create_free_tier(db)
+    assign_subscription_to_user(db, user_id=user.id, tier_id=free_tier.id)
 
     return user
 

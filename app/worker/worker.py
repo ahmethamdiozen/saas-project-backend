@@ -1,6 +1,7 @@
 import redis
 from rq import Worker, Queue
 from app.worker.cancel_listener import start_cancel_listener
+from app.core.config import settings
 from app.modules.users.models import User
 from app.modules.auth.models import RefreshToken
 from app.modules.subscriptions.models import Subscription, UserSubscription
@@ -12,7 +13,8 @@ start_cancel_listener()
 
 listen = ["default"]
 
-redis_conn = redis.Redis(host="localhost", port=6379, db=0)
+# Use settings.REDIS_URL instead of hardcoded localhost
+redis_conn = redis.from_url(settings.REDIS_URL)
 
 if __name__ == "__main__":
     worker = Worker(
