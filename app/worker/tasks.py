@@ -14,15 +14,16 @@ def process_job(job_id: str):
     db = SessionLocal()
     job = None
     try:
+        logger.info(f"Worker picked up Job: {job_id}")
         job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
-            logger.error(f"Job {job_id} not found")
+            logger.error(f"Job {job_id} not found in database")
             return
 
-        # Use datetime objects instead of integers for Postgres
         job.status = JobStatus.RUNNING.value
         job.started_at = datetime.now(timezone.utc)
         db.commit()
+        logger.info(f"Job {job_id} status set to RUNNING")
 
         if job.job_type == "rag_ingestion":
             doc_id = job.job_metadata.get("document_id")
@@ -31,10 +32,10 @@ def process_job(job_id: str):
                 try:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                         file_key = f"{doc.id}.pdf"
-                        logger.info(f"Downloading {file_key} from S3 for processing...")
+                        logger.info(f"Downloading {file_key} from S3...")
                         download_path = storage.download_file(file_key, tmp.name)
                         
-                        logger.info(f"Starting RAG ingestion for {doc.filename}")
+                        logger.info(f"Processing document: {doc.filename}")
                         page_count = rag_service.process_document(
                             download_path, 
                             str(doc.id), 
@@ -44,25 +45,30 @@ def process_job(job_id: str):
                         
                         doc.status = "ready"
                         doc.page_count = page_count
+                        db.commit() # Commit document status change immediately
+                        logger.info(f"Document {doc.id} marked as READY")
                         
                         if os.path.exists(download_path):
                             os.remove(download_path)
-                        logger.info(f"Successfully processed {doc.filename}")
                             
                 except Exception as e:
+                    db.rollback()
                     error_trace = traceback.format_exc()
-                    logger.error(f"RAG Processing failed for {doc_id}: {str(e)}\n{error_trace}")
+                    logger.error(f"Internal error during document processing {doc_id}: {str(e)}\n{error_trace}")
                     doc.status = "error"
+                    db.commit()
             
         job.status = JobStatus.SUCCESS.value
-        job.finished_at = datetime.now(timezone.utc) # Correct field name is finished_at
+        job.finished_at = datetime.now(timezone.utc)
         db.commit()
+        logger.info(f"Job {job_id} completed successfully")
 
     except Exception as e:
         db.rollback()
         if job:
             job.status = JobStatus.FAILED.value
             db.commit()
-        logger.error(f"Job {job_id} failed: {str(e)}")
+        logger.error(f"Fatal worker error for Job {job_id}: {str(e)}")
+        logger.error(traceback.format_exc())
     finally:
         db.close()

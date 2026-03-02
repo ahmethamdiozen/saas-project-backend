@@ -1,5 +1,5 @@
 from typing import List, Union, Optional
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, AnyHttpUrl, field_validator
 
 class Settings(BaseSettings):
@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     # Core Security
     SECRET_KEY: str = Field(..., env="SECRET_KEY")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 # Token expiry increased for convenience
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     
     # Database
     DATABASE_URL: str = Field(..., env="DATABASE_URL")
@@ -19,12 +19,17 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str = Field(..., env="OPENAI_API_KEY")
 
+    # Pinecone Vector DB
+    PINECONE_API_KEY: Optional[str] = Field(None, env="PINECONE_API_KEY")
+    PINECONE_INDEX_NAME: Optional[str] = Field(None, env="PINECONE_INDEX_NAME")
+    USE_PINECONE: bool = Field(False, env="USE_PINECONE")
+
     # AWS S3 Storage
     AWS_ACCESS_KEY_ID: Optional[str] = Field(None, env="AWS_ACCESS_KEY_ID")
     AWS_SECRET_ACCESS_KEY: Optional[str] = Field(None, env="AWS_SECRET_ACCESS_KEY")
     AWS_REGION: str = Field("eu-central-1", env="AWS_REGION")
     AWS_S3_BUCKET: Optional[str] = Field(None, env="AWS_S3_BUCKET")
-    USE_S3: bool = Field(False, env="USE_S3") # Toggle between local and S3
+    USE_S3: bool = Field(False, env="USE_S3")
 
     # Local Storage Fallback
     UPLOAD_DIR: str = "uploads"
@@ -49,9 +54,12 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development" # development, production, test
     LOG_LEVEL: str = "INFO"
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding  = "utf-8"
-        case_sensitive = True
+    # Pydantic Settings Configuration
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore" # THIS FIXES THE VALIDATION ERROR
+    )
 
 settings = Settings()

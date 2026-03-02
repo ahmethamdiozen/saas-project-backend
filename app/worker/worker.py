@@ -1,23 +1,26 @@
+import os
 import redis
-from rq import Worker, Queue
+from rq import Worker, Queue, SimpleWorker
 from app.worker.cancel_listener import start_cancel_listener
 from app.core.config import settings
-from app.modules.users.models import User
-from app.modules.auth.models import RefreshToken
-from app.modules.subscriptions.models import Subscription, UserSubscription
-from app.modules.jobs.models import Job, JobResult, JobExecution
-from app.db import models  # to load models
+from app.db import models # Load models
 
+# --- macOS FORK SAFETY ---
+# This environment variable helps with some C-library crashes on macOS
+os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 
 start_cancel_listener()
 
 listen = ["default"]
-
-# Use settings.REDIS_URL instead of hardcoded localhost
 redis_conn = redis.from_url(settings.REDIS_URL)
 
 if __name__ == "__main__":
-    worker = Worker(
-        [Queue(name, connection=redis_conn) for name in listen]
+    # On macOS ARM, os.fork() is highly unstable with C-extensions like fitz/pinecone.
+    # We use SimpleWorker which processes jobs sequentially in the same process.
+    print("🚀 Starting Production-Ready Worker (SimpleWorker Mode for macOS Stability)")
+    
+    worker = SimpleWorker(
+        [Queue(name, connection=redis_conn) for name in listen], 
+        connection=redis_conn
     )
     worker.work()

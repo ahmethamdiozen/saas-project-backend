@@ -1,6 +1,8 @@
 import redis
 from rq import Queue
+from app.core.config import settings
 
-redis_conn = redis.Redis(host="localhost", port=6379, db=0)
+# CRITICAL FIX: Use the unified cloud Redis URL instead of hardcoded localhost
+redis_conn = redis.from_url(settings.REDIS_URL)
 
 job_queue = Queue("default", connection=redis_conn)

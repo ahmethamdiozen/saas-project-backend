@@ -1,23 +1,36 @@
 import os
 import fitz  # PyMuPDF
+import traceback
+from app.core.config import settings
 from typing import List, Dict, Optional, Generator, Tuple
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
-from app.core.config import settings
+from langchain_pinecone import PineconeVectorStore
+from pinecone import Pinecone
 from app.core.logging import logger
 from openai import OpenAI
 
+# CRITICAL: Set environment variable globally for LangChain components
+if settings.PINECONE_API_KEY:
+    os.environ["PINECONE_API_KEY"] = settings.PINECONE_API_KEY
+
 class RAGService:
     def __init__(self):
-        self.embeddings = OpenAIEmbeddings(openai_api_key=settings.OPENAI_API_KEY)
+        self.embeddings = OpenAIEmbeddings(
+            openai_api_key=settings.OPENAI_API_KEY
+        )
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=100,
             separators=["\n\n", "\n", " ", ""]
         )
+        if settings.USE_PINECONE:
+            self.pc = Pinecone(api_key=settings.PINECONE_API_KEY)
+            self.index_name = settings.PINECONE_INDEX_NAME
 
     def extract_text_from_pdf(self, file_path: str) -> List[Dict]:
+        logger.info(f"Worker: Extracting text from {file_path}")
         doc = fitz.open(file_path)
         pages_content = []
         for page_num, page in enumerate(doc):
@@ -27,44 +40,70 @@ class RAGService:
         return pages_content
 
     def process_document(self, file_path: str, document_id: str, user_id: str, original_filename: str):
-        pages = self.extract_text_from_pdf(file_path)
-        chunks = []
-        metadatas = []
-        for page in pages:
-            page_chunks = self.text_splitter.split_text(page["content"])
-            for chunk in page_chunks:
-                chunks.append(chunk)
-                metadatas.append({
-                    "document_id": str(document_id),
-                    "user_id": str(user_id),
-                    "page": page["page"],
-                    "source": original_filename
-                })
+        try:
+            pages = self.extract_text_from_pdf(file_path)
+            
+            all_chunks = []
+            all_metadatas = []
+            
+            for page in pages:
+                page_chunks = self.text_splitter.split_text(page["content"])
+                for chunk in page_chunks:
+                    all_chunks.append(chunk)
+                    all_metadatas.append({
+                        "document_id": str(document_id),
+                        "user_id": str(user_id),
+                        "page": page["page"],
+                        "source": original_filename
+                    })
 
-        persist_directory = os.path.join(settings.CHROMA_DB_DIR, str(user_id))
-        vector_db = Chroma.from_texts(
-            texts=chunks,
-            embedding=self.embeddings,
-            metadatas=metadatas,
-            persist_directory=persist_directory,
-            collection_name=f"user_{user_id}_docs"
-        )
-        return len(pages)
+            if not all_chunks:
+                return len(pages)
+
+            if settings.USE_PINECONE:
+                logger.info(f"Worker: Sending {len(all_chunks)} chunks to Pinecone...")
+                # The environment variable is now set, so it should find the key automatically
+                PineconeVectorStore.from_texts(
+                    texts=all_chunks,
+                    embedding=self.embeddings,
+                    metadatas=all_metadatas,
+                    index_name=self.index_name,
+                    namespace=f"user_{user_id}"
+                )
+            else:
+                persist_directory = os.path.join(settings.CHROMA_DB_DIR, str(user_id))
+                Chroma.from_texts(
+                    texts=all_chunks,
+                    embedding=self.embeddings,
+                    metadatas=all_metadatas,
+                    persist_directory=persist_directory,
+                    collection_name=f"user_{user_id}_docs"
+                )
+            
+            logger.info(f"Worker: Successfully indexed {original_filename}")
+            return len(pages)
+        except Exception as e:
+            logger.error(f"Worker Error in process_document: {str(e)}")
+            raise e
 
     def delete_document_vectors(self, user_id: str, document_id: str):
-        """DELETES all vectors associated with a document ID for a specific user"""
         try:
-            persist_directory = os.path.join(settings.CHROMA_DB_DIR, str(user_id))
-            vector_db = Chroma(
-                persist_directory=persist_directory,
-                embedding_function=self.embeddings,
-                collection_name=f"user_{user_id}_docs"
-            )
-            # Chroma delete by metadata filter
-            vector_db.delete(where={"document_id": str(document_id)})
-            logger.info(f"Deleted vectors for document {document_id}")
+            if settings.USE_PINECONE:
+                index = self.pc.Index(self.index_name)
+                stats = index.describe_index_stats()
+                target_ns = f"user_{user_id}"
+                if target_ns in stats.get('namespaces', {}):
+                    index.delete(filter={"document_id": str(document_id)}, namespace=target_ns)
+            else:
+                persist_directory = os.path.join(settings.CHROMA_DB_DIR, str(user_id))
+                vector_db = Chroma(
+                    persist_directory=persist_directory,
+                    embedding_function=self.embeddings,
+                    collection_name=f"user_{user_id}_docs"
+                )
+                vector_db.delete(where={"document_id": str(document_id)})
         except Exception as e:
-            logger.error(f"Failed to delete vectors: {str(e)}")
+            logger.warning(f"Vector delete skipped: {str(e)}")
 
     def ask_question_stream(
         self, 
@@ -74,13 +113,20 @@ class RAGService:
         chat_history: Optional[List[Dict]] = None,
         doc_id_to_name: Optional[Dict[str, str]] = None
     ) -> Tuple[Generator[str, None, None], List[Dict]]:
-        """STREAMING Semantic search + LLM generation with STRICT RELEVANCE"""
-        persist_directory = os.path.join(settings.CHROMA_DB_DIR, str(user_id))
-        vector_db = Chroma(
-            persist_directory=persist_directory,
-            embedding_function=self.embeddings,
-            collection_name=f"user_{user_id}_docs"
-        )
+        
+        if settings.USE_PINECONE:
+            vector_db = PineconeVectorStore(
+                index_name=self.index_name,
+                embedding=self.embeddings,
+                namespace=f"user_{user_id}"
+            )
+        else:
+            persist_directory = os.path.join(settings.CHROMA_DB_DIR, str(user_id))
+            vector_db = Chroma(
+                persist_directory=persist_directory,
+                embedding_function=self.embeddings,
+                collection_name=f"user_{user_id}_docs"
+            )
 
         search_kwargs = {}
         if selected_document_ids:
@@ -113,17 +159,11 @@ class RAGService:
         
         if is_context_empty:
             system_prompt = (
-                "You are a strict Document Assistant. The user's question is NOT related to the selected documents. "
-                "Inform the user politely that you can only answer questions based on the provided documents "
-                "and their question is currently out of scope. Do not answer using your general knowledge."
+                "You are a strict Document Assistant. The user's question is NOT related to the selected documents."
             )
         else:
             system_prompt = (
                 "You are a Document Analysis Expert. Use ONLY the provided context below to answer. \n\n"
-                "RULES:\n"
-                "1. If the specific answer isn't in the text, say you don't know based on these documents.\n"
-                "2. If the user asks general chat ('Hi', 'Who are you?'), state you are their document assistant.\n"
-                "3. Use Markdown structure.\n\n"
                 f"CONTEXT:\n{context_string}"
             )
 
