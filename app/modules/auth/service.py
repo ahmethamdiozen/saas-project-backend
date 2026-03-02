@@ -12,7 +12,8 @@ from app.core.security import (
 )
 from app.modules.auth.repository import (
     create_refresh_token,
-    get_valid_refresh_token
+    get_valid_refresh_token,
+    revoke_refresh_token
 )
 from app.modules.subscriptions.service import (
     get_or_create_free_tier,
@@ -72,3 +73,8 @@ def refresh_access_token(db, *, raw_refresh_token: str) -> str:
     )
 
     return new_access_token
+
+def logout_user(db: Session, *, raw_refresh_token: str):
+    if raw_refresh_token:
+        token_hash = hash_refresh_token(raw_refresh_token)
+        revoke_refresh_token(db, token_hash)

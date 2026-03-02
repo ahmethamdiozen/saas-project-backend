@@ -1,11 +1,12 @@
 import os
 import fitz  # PyMuPDF
-from typing import List, Dict
+from typing import List, Dict, Optional, Generator, Tuple
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 from app.core.config import settings
 from app.core.logging import logger
+from openai import OpenAI
 
 class RAGService:
     def __init__(self):
@@ -17,26 +18,16 @@ class RAGService:
         )
 
     def extract_text_from_pdf(self, file_path: str) -> List[Dict]:
-        """Extracts text from PDF with page numbers"""
         doc = fitz.open(file_path)
         pages_content = []
         for page_num, page in enumerate(doc):
             text = page.get_text("text")
             if text.strip():
-                pages_content.append({
-                    "content": text,
-                    "page": page_num + 1
-                })
+                pages_content.append({"content": text, "page": page_num + 1})
         return pages_content
 
-    def process_document(self, file_path: str, document_id: str, user_id: str):
-        """Main pipeline: Extract -> Chunk -> Embed -> Store"""
-        logger.info(f"Starting RAG pipeline for document {document_id}")
-        
-        # 1. Extract
+    def process_document(self, file_path: str, document_id: str, user_id: str, original_filename: str):
         pages = self.extract_text_from_pdf(file_path)
-        
-        # 2. Chunk
         chunks = []
         metadatas = []
         for page in pages:
@@ -47,12 +38,10 @@ class RAGService:
                     "document_id": str(document_id),
                     "user_id": str(user_id),
                     "page": page["page"],
-                    "source": os.path.basename(file_path)
+                    "source": original_filename
                 })
 
-        # 3. Store in ChromaDB
         persist_directory = os.path.join(settings.CHROMA_DB_DIR, str(user_id))
-        
         vector_db = Chroma.from_texts(
             texts=chunks,
             embedding=self.embeddings,
@@ -60,53 +49,101 @@ class RAGService:
             persist_directory=persist_directory,
             collection_name=f"user_{user_id}_docs"
         )
-        
-        logger.info(f"Successfully indexed {len(chunks)} chunks for document {document_id}")
         return len(pages)
 
-    def ask_question(self, user_id: str, question: str):
-        """Semantic search + LLM generation"""
+    def delete_document_vectors(self, user_id: str, document_id: str):
+        """DELETES all vectors associated with a document ID for a specific user"""
+        try:
+            persist_directory = os.path.join(settings.CHROMA_DB_DIR, str(user_id))
+            vector_db = Chroma(
+                persist_directory=persist_directory,
+                embedding_function=self.embeddings,
+                collection_name=f"user_{user_id}_docs"
+            )
+            # Chroma delete by metadata filter
+            vector_db.delete(where={"document_id": str(document_id)})
+            logger.info(f"Deleted vectors for document {document_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete vectors: {str(e)}")
+
+    def ask_question_stream(
+        self, 
+        user_id: str, 
+        question: str, 
+        selected_document_ids: Optional[List[str]] = None,
+        chat_history: Optional[List[Dict]] = None,
+        doc_id_to_name: Optional[Dict[str, str]] = None
+    ) -> Tuple[Generator[str, None, None], List[Dict]]:
+        """STREAMING Semantic search + LLM generation with STRICT RELEVANCE"""
         persist_directory = os.path.join(settings.CHROMA_DB_DIR, str(user_id))
-        
-        # Load existing collection
         vector_db = Chroma(
             persist_directory=persist_directory,
             embedding_function=self.embeddings,
             collection_name=f"user_{user_id}_docs"
         )
 
-        # 1. Search for context
-        docs = vector_db.similarity_search(question, k=4)
-        context = "\n\n".join([doc.page_content for doc in docs])
-        sources = [
-            {"source": doc.metadata.get("source"), "page": doc.metadata.get("page")}
-            for doc in docs
-        ]
+        search_kwargs = {}
+        if selected_document_ids:
+            search_kwargs["filter"] = {"document_id": {"$in": [str(sid) for sid in selected_document_ids]}}
 
-        # 2. Generate Answer with OpenAI
-        from openai import OpenAI
+        RELEVANCE_THRESHOLD = 0.38
+        docs_with_scores = vector_db.similarity_search_with_score(question, k=5, **search_kwargs)
+        
+        filtered_docs = [doc for doc, score in docs_with_scores if score < RELEVANCE_THRESHOLD]
+
+        context_parts = []
+        sources = []
+        seen_sources = set()
+
+        if filtered_docs:
+            for doc in filtered_docs:
+                doc_id = doc.metadata.get("document_id")
+                page = doc.metadata.get("page")
+                source_name = doc_id_to_name.get(doc_id) if doc_id_to_name and doc_id in doc_id_to_name else doc.metadata.get("source")
+                context_parts.append(f"SOURCE: {source_name}\nCONTENT: {doc.page_content}")
+                src_key = f"{doc_id}_{page}"
+                if src_key not in seen_sources:
+                    sources.append({"source": source_name, "page": page, "document_id": doc_id})
+                    seen_sources.add(src_key)
+        
+        context_string = "\n\n".join(context_parts) if context_parts else ""
+        is_context_empty = len(context_parts) == 0
+
         client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
-        system_prompt = (
-            "You are a helpful assistant. Use the following context from uploaded PDF documents "
-            "to answer the user's question. If you don't know the answer based on the context, "
-            "just say you don't know based on the provided documents. "
-            "Be precise and cite the context if possible.\n\n"
-            f"CONTEXT:\n{context}"
-        )
+        if is_context_empty:
+            system_prompt = (
+                "You are a strict Document Assistant. The user's question is NOT related to the selected documents. "
+                "Inform the user politely that you can only answer questions based on the provided documents "
+                "and their question is currently out of scope. Do not answer using your general knowledge."
+            )
+        else:
+            system_prompt = (
+                "You are a Document Analysis Expert. Use ONLY the provided context below to answer. \n\n"
+                "RULES:\n"
+                "1. If the specific answer isn't in the text, say you don't know based on these documents.\n"
+                "2. If the user asks general chat ('Hi', 'Who are you?'), state you are their document assistant.\n"
+                "3. Use Markdown structure.\n\n"
+                f"CONTEXT:\n{context_string}"
+            )
 
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question}
-            ],
-            temperature=0.2
-        )
+        messages = [{"role": "system", "content": system_prompt}]
+        if chat_history:
+            for msg in chat_history[-6:]:
+                messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": question})
 
-        return {
-            "answer": response.choices[0].message.content,
-            "sources": sources
-        }
+        def generate():
+            stream = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                temperature=0.0,
+                stream=True
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+
+        return generate(), sources
 
 rag_service = RAGService()

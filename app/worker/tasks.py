@@ -1,122 +1,68 @@
-from datetime import datetime, timezone
-import time
 import os
-
+import tempfile
+import traceback
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
-from app.core.logging import logger
-from app.modules.jobs.models import Job, JobResult, JobStatus, JobExecution
+from app.modules.jobs.models import Job, JobStatus
 from app.modules.rag.models import Document
 from app.modules.rag.service import rag_service
-from app.worker.locks import acquire_job_lock, release_job_lock
-from app.worker.cancellation import (
-    CancellationToken, 
-    register_token,
-    unregister_token,
-    JobCancelledError
-)
-
-
-SLOW_EXECUTION_THRESHOLD = 30 # RAG can take time
+from app.core.storage import storage
+from app.core.logging import logger
 
 def process_job(job_id: str):
-
-    token = CancellationToken()
-    register_token(job_id, token)
-
-    if not acquire_job_lock(job_id):
-        logger.warning(f"Job {job_id} already running")
-        return
-    
-    db = None
-    execution = None
-    document = None # Pre-initialize to avoid UnboundLocalError
-    
+    db = SessionLocal()
+    job = None
     try:
-        db = SessionLocal()
         job = db.query(Job).filter(Job.id == job_id).first()
-
-        if not job or job.status in (JobStatus.SUCCESS.value, JobStatus.FAILED.value):
-            return
-        
-        # Get associated document from job_metadata
-        doc_id = job.job_metadata.get("document_id") if job.job_metadata else None
-        document = db.query(Document).filter(Document.id == doc_id).first() if doc_id else None
-
-        if not document:
-            logger.error(f"No document found for job {job_id}")
+        if not job:
+            logger.error(f"Job {job_id} not found")
             return
 
-        attempt_number = len(job.executions) + 1
-        execution = JobExecution(
-            job_id = job.id,
-            attempt_number=attempt_number,
-            status=JobStatus.RUNNING.value,
-            started_at=datetime.now(timezone.utc)
-        )
-        db.add(execution)
-        db.commit()
-
+        # Use datetime objects instead of integers for Postgres
         job.status = JobStatus.RUNNING.value
         job.started_at = datetime.now(timezone.utc)
         db.commit()
 
-        # --- RAG PIPELINE ---
-        
-        token.raise_if_cancelled()
-        # STEP 1: Extraction
-        execution.current_step = "extracting_text"
-        execution.progress = 20
-        db.commit()
-        
-        # We perform actual extraction
-        pages_content = rag_service.extract_text_from_pdf(document.file_path)
-        document.page_count = len(pages_content)
-        db.commit()
-
-        token.raise_if_cancelled()
-        # STEP 2: Chunking & Embedding
-        execution.current_step = "generating_embeddings"
-        execution.progress = 60
-        db.commit()
-        
-        # This will store in ChromaDB
-        rag_service.process_document(document.file_path, str(document.id), str(job.user_id))
-
-        token.raise_if_cancelled()
-        # STEP 3: Finalizing
-        execution.current_step = "finalizing"
-        execution.progress = 90
-        db.commit()
-
-        # Success
-        execution.status = JobStatus.SUCCESS.value
-        execution.progress = 100
-        execution.finished_at = datetime.now(timezone.utc)
-        execution.duration_seconds = (execution.finished_at - execution.started_at).total_seconds()
-        
-        document.status = "ready"
+        if job.job_type == "rag_ingestion":
+            doc_id = job.job_metadata.get("document_id")
+            doc = db.query(Document).filter(Document.id == doc_id).first()
+            if doc:
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                        file_key = f"{doc.id}.pdf"
+                        logger.info(f"Downloading {file_key} from S3 for processing...")
+                        download_path = storage.download_file(file_key, tmp.name)
+                        
+                        logger.info(f"Starting RAG ingestion for {doc.filename}")
+                        page_count = rag_service.process_document(
+                            download_path, 
+                            str(doc.id), 
+                            str(doc.user_id),
+                            doc.filename
+                        )
+                        
+                        doc.status = "ready"
+                        doc.page_count = page_count
+                        
+                        if os.path.exists(download_path):
+                            os.remove(download_path)
+                        logger.info(f"Successfully processed {doc.filename}")
+                            
+                except Exception as e:
+                    error_trace = traceback.format_exc()
+                    logger.error(f"RAG Processing failed for {doc_id}: {str(e)}\n{error_trace}")
+                    doc.status = "error"
+            
         job.status = JobStatus.SUCCESS.value
-        job.finished_at = datetime.now(timezone.utc)
-        
+        job.finished_at = datetime.now(timezone.utc) # Correct field name is finished_at
         db.commit()
-        logger.info(f"RAG processing complete for document {document.id}")
 
     except Exception as e:
-        logger.error(f"RAG Job failed: {str(e)}", exc_info=True)
-        if db:
-            db.rollback()
-            if execution:
-                execution.status = JobStatus.FAILED.value
-                execution.error_message = str(e)
-                execution.finished_at = datetime.now(timezone.utc)
-            if job:
-                job.status = JobStatus.FAILED.value
-            if document:
-                document.status = "error"
+        db.rollback()
+        if job:
+            job.status = JobStatus.FAILED.value
             db.commit()
-        raise
+        logger.error(f"Job {job_id} failed: {str(e)}")
     finally:
-        release_job_lock(job_id)
-        if db: db.close()
-        unregister_token(job_id)
+        db.close()

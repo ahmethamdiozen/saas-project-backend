@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import axios from 'axios';
 import { 
   Plus, 
   Upload, 
@@ -9,265 +12,734 @@ import {
   CheckCircle2, 
   Loader2, 
   RefreshCcw,
-  X,
   Search,
-  BookOpen
+  BookOpen,
+  FolderPlus,
+  Folder,
+  Trash2,
+  Layers,
+  ArrowLeft,
+  CheckSquare,
+  Square,
+  Edit2,
+  Circle,
+  CheckCircle,
+  Library,
+  Files,
+  ChevronDown,
+  ArrowRight,
+  Link as LinkIcon,
+  Clock,
+  MoreVertical,
+  Pin,
+  PinOff,
+  X,
+  Zap,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import api from '../services/api';
+import { useNotifications } from '../context/NotificationContext';
+
+// --- TYPES ---
+interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  documents: Document[];
+}
 
 interface Document {
   id: string;
   filename: string;
   status: 'processing' | 'ready' | 'error';
   page_count: number | null;
+  project_id?: string | null;
+  created_at: string;
+}
+
+interface ChatSession {
+  id: string;
+  title: string;
+  is_pinned: boolean;
+  selected_document_ids: string[];
   created_at: string;
 }
 
 interface ChatMessage {
-  role: 'user' | 'ai';
+  id: string;
+  role: 'user' | 'assistant';
   content: string;
-  sources?: { source: string; page: number }[];
+  sources?: { source: string; page: number; document_id: string }[];
 }
 
 export default function Dashboard() {
-  const [documents, setDocuments] = useState<Document[]>([]);
+  const { showToast, confirm, prompt: showPrompt } = useNotifications();
+
+  // Navigation & UI State
+  const [view, setView] = useState<'library' | 'chat'>('library');
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [showFileManager, setShowFileManager] = useState(false);
+  const [showAttachModal, setShowAttachModal] = useState(false);
+  const [attachToProjectId, setAttachToProjectId] = useState<string | null>(null);
+  const [isMoveMenuOpen, setIsMoveMenuOpen] = useState(false);
+  const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
+  
+  // Preview State
+  const [previewDocId, setPreviewDocId] = useState<string | null>(null);
+  const [previewPage, setPreviewPage] = useState<number>(1);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [loadingPdf, setLoadingPdf] = useState(false);
+
+  // Data State
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [allDocs, setAllDocs] = useState<Document[]>([]);
+  const [selectedDocs, setSelectedDocs] = useState<string[]>([]);
+  const [modalSelectedDocs, setModalSelectedDocs] = useState<string[]>([]);
+  const [attachSelectedDocs, setAttachSelectedDocs] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
+  const [uploadingToProject, setUploadingToProject] = useState<string | null>(null);
+
+  // Chat State
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState('');
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [asking, setAsking] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  const fetchDocuments = async () => {
+  // --- FETCHING ---
+  const fetchData = async () => {
     try {
-      const res = await api.get('/rag/documents');
-      setDocuments(res.data);
-    } catch (err) {
-      console.error('Failed to fetch documents');
-    } finally {
-      setLoading(false);
+      const [projRes, docsRes, sessionRes] = await Promise.all([
+        api.get('/rag/projects'),
+        api.get('/rag/documents'),
+        api.get('/rag/chats')
+      ]);
+      setProjects(projRes.data);
+      setAllDocs(docsRes.data);
+      setSessions(sessionRes.data);
+    } catch (err) { 
+      console.error('Dashboard data fetch failed');
+    } finally { 
+      setLoading(false); 
     }
   };
 
   useEffect(() => {
-    fetchDocuments();
-    const interval = setInterval(fetchDocuments, 5000); // Poll documents status
+    fetchData();
+    const interval = setInterval(fetchData, 10000); 
     return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
+    if (activeSessionId) fetchMessages(activeSessionId);
+  }, [activeSessionId]);
+
+  useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatHistory]);
+  }, [messages]);
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  useEffect(() => {
+    return () => { if (previewUrl) URL.revokeObjectURL(previewUrl); };
+  }, [previewUrl]);
 
-    setUploading(true);
-    const formData = new FormData();
-    formData.append('file', file);
+  // Click outside listener for chat history menu
+  useEffect(() => {
+    const handleClickOutside = () => setOpenChatMenuId(null);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
 
+  const fetchMessages = async (sid: string) => {
     try {
-      await api.post('/rag/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
-      fetchDocuments();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Upload failed');
+      const res = await api.get(`/rag/chats/${sid}/messages`);
+      setMessages(res.data);
+    } catch (err) { console.error('Failed to fetch messages'); }
+  };
+
+  // --- ACTIONS ---
+  const handleCreateProject = () => {
+    showPrompt({
+      title: "New Project",
+      message: "Enter a name for your new knowledge base.",
+      placeholder: "Project name...",
+      onConfirm: async (name) => {
+        try {
+          await api.post('/rag/projects', { name });
+          showToast("Project created successfully!");
+          fetchData();
+        } catch (err) {
+          showToast("Failed to create project", "error");
+        }
+      }
+    });
+  };
+
+  const handleCreateProjectWithDocs = () => {
+    if (modalSelectedDocs.length === 0) return;
+    showPrompt({
+      title: "Project from Selection",
+      message: `Create a new project with ${modalSelectedDocs.length} documents.`,
+      placeholder: "Project name...",
+      onConfirm: async (name) => {
+        try {
+          const projRes = await api.post('/rag/projects', { name });
+          await api.post('/rag/documents/bulk-move', { document_ids: modalSelectedDocs, project_id: projRes.data.id });
+          setModalSelectedDocs([]);
+          showToast("Project created with documents!");
+          fetchData();
+        } catch (err) {
+          showToast("Operation failed", "error");
+        }
+      }
+    });
+  };
+
+  const handleEditProject = (id: string, currentName: string) => {
+    showPrompt({
+      title: "Rename Project",
+      message: "Enter a new name for this project.",
+      defaultValue: currentName,
+      onConfirm: async (newName) => {
+        try {
+          await api.patch(`/rag/projects/${id}`, { name: newName });
+          showToast("Project renamed");
+          fetchData();
+        } catch (err) {
+          showToast("Rename failed", "error");
+        }
+      }
+    });
+  };
+
+  const handleDeleteProject = (id: string) => {
+    confirm({
+      title: "Delete Project?",
+      message: "The documents will remain in your global library.",
+      confirmText: "Delete",
+      onConfirm: async () => {
+        try {
+          await api.delete(`/rag/projects/${id}`);
+          showToast("Project deleted");
+          fetchData();
+        } catch (err) {
+          showToast("Delete failed", "error");
+        }
+      }
+    });
+  };
+
+  const handleFileUpload = async (projectId: string | null, e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploadingToProject(projectId || 'global');
+    const formData = new FormData();
+    for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
+    try {
+      const url = projectId ? `/rag/upload?project_id=${projectId}` : '/rag/upload';
+      await api.post(url, formData);
+      showToast(`Uploading ${files.length} files...`, "info");
+      fetchData();
+    } catch (err) {
+      showToast("Upload failed", "error");
     } finally {
-      setUploading(false);
+      setUploadingToProject(null);
+    }
+  };
+
+  const handleEditDoc = (id: string, currentName: string) => {
+    showPrompt({
+      title: "Rename File",
+      message: "Enter a new filename.",
+      defaultValue: currentName.replace('.pdf', ''),
+      onConfirm: async (newName) => {
+        try {
+          await api.patch(`/rag/documents/${id}`, { filename: newName });
+          showToast("File renamed");
+          fetchData();
+        } catch (err) {
+          showToast("Rename failed", "error");
+        }
+      }
+    });
+  };
+
+  const handleDeleteDoc = (id: string, permanent: boolean = false) => {
+    const msg = permanent ? 'Permanently delete document from library?' : 'Remove document from this project?';
+    confirm({
+      title: permanent ? "Permanent Delete?" : "Remove from Project?",
+      message: msg,
+      confirmText: permanent ? "Delete Permanently" : "Remove",
+      onConfirm: async () => {
+        try {
+          await api.delete(`/rag/documents/${id}${permanent ? '?permanent=true' : ''}`);
+          showToast(permanent ? "File deleted permanently" : "File removed from project");
+          fetchData();
+        } catch (err) {
+          showToast("Operation failed", "error");
+        }
+      }
+    });
+  };
+
+  const handleBulkDelete = (docIds: string[], permanent: boolean = false) => {
+    confirm({
+      title: permanent ? "Delete Multiple Files?" : "Remove Multiple Files?",
+      message: `Are you sure you want to process ${docIds.length} files?`,
+      confirmText: "Continue",
+      onConfirm: async () => {
+        try {
+          await api.post('/rag/documents/bulk-delete', { document_ids: docIds, permanent });
+          if (permanent) setModalSelectedDocs([]); else setSelectedDocs([]);
+          showToast("Bulk operation successful");
+          fetchData();
+        } catch (err) {
+          showToast("Bulk operation failed", "error");
+        }
+      }
+    });
+  };
+
+  const handleBulkMove = async (targetProjectId: string, docIds: string[]) => {
+    try {
+      await api.post('/rag/documents/bulk-move', { document_ids: docIds, project_id: targetProjectId });
+      showToast(`Moved ${docIds.length} files`);
+      fetchData();
+    } catch (err) {
+      showToast("Move failed", "error");
+    }
+  };
+
+  const handleAttachDocs = async () => {
+    if (!attachToProjectId || attachSelectedDocs.length === 0) return;
+    await handleBulkMove(attachToProjectId, attachSelectedDocs);
+    setAttachSelectedDocs([]); setShowAttachModal(false); setAttachToProjectId(null);
+  };
+
+  const handleRenameChat = (id: string, currentTitle: string) => {
+    showPrompt({
+      title: "Rename Chat",
+      message: "Enter a new title for this conversation.",
+      defaultValue: currentTitle,
+      onConfirm: async (newTitle) => {
+        try {
+          await api.patch(`/rag/chats/${id}`, { title: newTitle });
+          setOpenChatMenuId(null);
+          showToast("Chat renamed");
+          fetchData();
+        } catch (err) {
+          showToast("Rename failed", "error");
+        }
+      }
+    });
+  };
+
+  const handleTogglePinChat = async (session: ChatSession) => {
+    try {
+      await api.patch(`/rag/chats/${session.id}`, { is_pinned: !session.is_pinned });
+      setOpenChatMenuId(null);
+      showToast(session.is_pinned ? "Chat unpinned" : "Chat pinned");
+      fetchData();
+    } catch (err) {
+      showToast("Operation failed", "error");
+    }
+  };
+
+  const handleDeleteChat = (id: string) => {
+    confirm({
+      title: "Delete Chat?",
+      message: "This will permanently delete the conversation history.",
+      confirmText: "Delete",
+      onConfirm: async () => {
+        try {
+          await api.delete(`/rag/chats/${id}`);
+          if (activeSessionId === id) {
+            setView('library');
+            setActiveSessionId(null);
+          }
+          setOpenChatMenuId(null);
+          showToast("Chat deleted");
+          fetchData();
+        } catch (err) {
+          showToast("Delete failed", "error");
+        }
+      }
+    });
+  };
+
+  const toggleDocSelection = (docId: string, type: 'main' | 'modal' | 'attach' = 'main') => {
+    const setter = type === 'main' ? setSelectedDocs : type === 'modal' ? setModalSelectedDocs : setAttachSelectedDocs;
+    setter(p => p.includes(docId) ? p.filter(id => id !== docId) : [...p, docId]);
+  };
+
+  const handleSelectAllInProject = (docs: Document[]) => {
+    const readyDocIds = docs.filter(d => d.status === 'ready').map(d => d.id);
+    const allSelected = readyDocIds.length > 0 && readyDocIds.every(id => selectedDocs.includes(id));
+    if (allSelected) setSelectedDocs(prev => prev.filter(id => !readyDocIds.includes(id)));
+    else setSelectedDocs(prev => Array.from(new Set([...prev, ...readyDocIds])));
+  };
+
+  const handleSelectAllInModal = () => {
+    const readyDocIds = allDocs.filter(d => d.status === 'ready').map(d => d.id);
+    const allSelected = readyDocIds.length > 0 && readyDocIds.every(id => modalSelectedDocs.includes(id));
+    if (allSelected) setModalSelectedDocs([]);
+    else setModalSelectedDocs(readyDocIds);
+  };
+
+  const handleStartChat = async (selection: string[]) => {
+    if (selection.length === 0) return;
+    let projectId: string | null = null;
+    for (const proj of projects) {
+      if (selection.every(id => proj.documents.map(d => d.id).includes(id))) {
+        projectId = proj.id;
+        break;
+      }
+    }
+    try {
+      const res = await api.post('/rag/chats', { selected_document_ids: selection, project_id: projectId });
+      setSessions([res.data, ...sessions]);
+      setActiveSessionId(res.data.id);
+      setView('chat');
+      setShowFileManager(false);
+      setSelectedDocs([]);
+      setModalSelectedDocs([]);
+      showToast("Chat session started!");
+    } catch (err) {
+      showToast("Could not start chat", "error");
     }
   };
 
   const handleAsk = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!question.trim() || asking) return;
+    if (!question.trim() || !activeSessionId || asking) return;
 
-    const userMsg = { role: 'user' as const, content: question };
-    setChatHistory(prev => [...prev, userMsg]);
+    const userQ = question;
     setQuestion('');
     setAsking(true);
 
+    const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: userQ };
+    setMessages(prev => [...prev, userMsg]);
+
+    const aiMsgId = (Date.now() + 1).toString();
+    setMessages(prev => [...prev, { id: aiMsgId, role: 'assistant', content: '' }]);
+
+    const performStream = async () => {
+      const response = await fetch(`http://localhost:8000/api/v1/rag/chats/${activeSessionId}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: userQ }),
+        credentials: 'include' // CRITICAL: Send cookies with fetch
+      });
+
+      if (response.status === 401) {
+        try {
+          await api.post('/auth/refresh', {});
+          return performStream(); // Retry after refresh
+        } catch (e) {
+          window.location.href = '/login';
+          return;
+        }
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let accumulatedContent = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          accumulatedContent += decoder.decode(value, { stream: true });
+          setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, content: accumulatedContent } : m));
+        }
+      }
+      fetchMessages(activeSessionId);
+    };
+
     try {
-      const res = await api.post('/rag/ask', { question });
-      setChatHistory(prev => [...prev, { 
-        role: 'ai', 
-        content: res.data.answer,
-        sources: res.data.sources
-      }]);
+      await performStream();
     } catch (err) {
-      setChatHistory(prev => [...prev, { role: 'ai', content: 'Sorry, I failed to process that question.' }]);
+      console.error('Streaming error:', err);
+      setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, content: 'Error getting response.' } : m));
     } finally {
       setAsking(false);
     }
   };
 
+  const handleSourceClick = async (docId: string, page: number) => {
+    setPreviewPage(page);
+    if (docId === previewDocId && previewUrl) return;
+    setLoadingPdf(true);
+    setPreviewDocId(docId);
+    try {
+      const response = await api.get(`/rag/documents/${docId}/file`, { responseType: 'blob' });
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      setPreviewUrl(url);
+    } catch (err) {
+      showToast("Could not load PDF file", "error");
+      setPreviewDocId(null);
+    } finally {
+      setLoadingPdf(false);
+    }
+  };
+
+  if (loading) return <div className="flex items-center justify-center h-full text-white font-bold"><Loader2 className="animate-spin text-primary" size={40} /></div>;
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pb-10 min-h-[85vh]">
+    <div className="flex h-full w-full text-white text-left relative overflow-hidden bg-[#030712]">
       
-      {/* LEFT: Documents Management (4 columns) */}
-      <div className="lg:col-span-4 space-y-6">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-black tracking-tighter">My <span className="gradient-text">Library.</span></h1>
-          <p className="text-gray-400 text-sm font-medium">Upload PDFs to train your personal AI.</p>
-        </header>
-
-        {/* Upload Area */}
-        <div className="relative group">
-          <input 
-            type="file" 
-            accept=".pdf" 
-            onChange={handleFileUpload}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-            disabled={uploading}
-          />
-          <div className={`p-8 border-2 border-dashed rounded-[2rem] transition-all flex flex-col items-center justify-center gap-4 ${
-            uploading ? 'bg-primary/5 border-primary/30' : 'bg-white/5 border-white/10 group-hover:border-primary/50 group-hover:bg-primary/5'
-          }`}>
-            <div className="w-12 h-12 bg-primary/20 text-primary rounded-xl flex items-center justify-center">
-              {uploading ? <Loader2 className="animate-spin" /> : <Upload size={24} />}
-            </div>
-            <div className="text-center">
-              <p className="font-bold text-white text-sm">Click or Drag PDF</p>
-              <p className="text-gray-500 text-xs mt-1">Maximum 10MB per file</p>
-            </div>
-          </div>
+      {/* SIDEBAR */}
+      <aside className="w-72 flex-shrink-0 flex flex-col bg-[#0b0e14] border-r border-white/5 overflow-hidden transition-all duration-300">
+        <div className="p-4 border-b border-white/5">
+          <button 
+            onClick={() => setView('library')} 
+            className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all hover:scale-[1.02] shadow-lg ${view === 'library' ? 'bg-white/10 text-white border-white/10 border' : 'bg-primary text-white shadow-primary/20'}`}
+          >
+            <Library size={18} /> Knowledge Hub
+          </button>
         </div>
-
-        {/* Documents List */}
-        <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-          <AnimatePresence mode="popLayout">
-            {documents.length === 0 && !loading ? (
-              <div className="text-center py-10 text-gray-500 font-medium text-sm italic">No documents yet.</div>
-            ) : (
-              documents.map((doc) => (
-                <motion.div
-                  key={doc.id}
-                  layout
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="p-4 glass-effect rounded-2xl border border-white/5 hover:border-white/10 transition-all flex items-center gap-4 group"
-                >
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                    doc.status === 'ready' ? 'bg-green-500/10 text-green-400' : 'bg-yellow-500/10 text-yellow-400'
-                  }`}>
-                    {doc.status === 'ready' ? <CheckCircle2 size={18} /> : <Loader2 size={18} className="animate-spin" />}
-                  </div>
-                  <div className="flex-grow min-w-0">
-                    <h4 className="text-sm font-bold text-white truncate group-hover:text-primary transition-colors">{doc.filename}</h4>
-                    <div className="flex items-center gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-tighter">
-                      <span>{doc.page_count ? `${doc.page_count} Pages` : 'Processing'}</span>
-                      <span>•</span>
-                      <span>{new Date(doc.created_at).toLocaleDateString()}</span>
-                    </div>
-                  </div>
-                </motion.div>
-              ))
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
-
-      {/* RIGHT: Chat Interface (8 columns) */}
-      <div className="lg:col-span-8 flex flex-col glass-effect rounded-[2.5rem] border border-white/5 overflow-hidden shadow-2xl relative">
         
-        {/* Chat Header */}
-        <div className="p-6 border-b border-white/5 bg-white/5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-accent/20 text-accent rounded-xl flex items-center justify-center">
-              <MessageSquare size={20} />
-            </div>
-            <div>
-              <h3 className="font-bold text-white">Document Assistant</h3>
-              <p className="text-[10px] text-green-400 font-black uppercase tracking-widest flex items-center gap-1">
-                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
-                Context Aware Ready
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-             <button onClick={() => setChatHistory([])} className="p-2 text-gray-500 hover:text-white transition-colors" title="Clear Chat">
-               <RefreshCcw size={18} />
-             </button>
-          </div>
-        </div>
-
-        {/* Chat Messages */}
-        <div className="flex-grow overflow-y-auto p-6 space-y-6 custom-scrollbar min-h-[400px]">
-          {chatHistory.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-30 grayscale hover:opacity-50 transition-opacity">
-              <div className="w-20 h-20 bg-white/10 rounded-full flex items-center justify-center">
-                <Search size={40} />
-              </div>
-              <div>
-                <p className="text-xl font-bold">Ask anything about your PDFs</p>
-                <p className="text-sm">Upload documents on the left to get started.</p>
-              </div>
-            </div>
-          ) : (
-            chatHistory.map((msg, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+        <div className="flex-grow overflow-y-auto p-3 space-y-1 custom-scrollbar relative">
+          <p className="px-4 py-2 text-[10px] font-bold text-gray-500 uppercase tracking-widest">History</p>
+          {sessions.map(s => (
+            <div key={s.id} className="relative group/session px-1 text-white">
+              <button 
+                onClick={() => { setActiveSessionId(s.id); setView('chat'); setPreviewDocId(null); setPreviewUrl(null); }} 
+                className={`w-full p-3 pr-12 rounded-xl transition-all flex items-center gap-3 relative ${activeSessionId === s.id && view === 'chat' ? 'bg-white/10 text-white border-white/10 border' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}
               >
-                <div className={`max-w-[85%] p-5 rounded-3xl ${
-                  msg.role === 'user' 
-                    ? 'bg-primary text-white rounded-br-none shadow-xl shadow-primary/20' 
-                    : 'bg-white/5 text-gray-200 border border-white/5 rounded-bl-none'
-                }`}>
-                  <p className="text-sm font-medium leading-relaxed">{msg.content}</p>
-                  
-                  {msg.sources && msg.sources.length > 0 && (
-                    <div className="mt-4 pt-3 border-t border-white/10 flex flex-wrap gap-2">
-                      {msg.sources.map((s, si) => (
-                        <div key={si} className="px-2 py-1 bg-white/5 rounded-md text-[10px] font-bold text-gray-400 flex items-center gap-1 border border-white/5 hover:border-primary/30 transition-colors">
-                          <BookOpen size={10} />
-                          {s.source} (p. {s.page})
+                <MessageSquare size={16} className={`flex-shrink-0 ${activeSessionId === s.id && view === 'chat' ? 'text-primary' : ''}`} />
+                <div className="min-w-0 flex-grow flex items-center gap-2">
+                  <p className="truncate text-xs font-bold">{s.title}</p>
+                  {s.is_pinned && <Pin size={12} className="text-primary fill-current flex-shrink-0" />}
+                </div>
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); setOpenChatMenuId(openChatMenuId === s.id ? null : s.id); }} className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-gray-600 hover:text-white opacity-0 group-hover/session:opacity-100 transition-opacity z-10"><MoreVertical size={16} /></button>
+              <AnimatePresence>
+                {openChatMenuId === s.id && (
+                  <motion.div 
+                    onClick={(e) => e.stopPropagation()} 
+                    initial={{ scale: 0.9, opacity: 0 }} 
+                    animate={{ scale: 1, opacity: 1 }} 
+                    exit={{ scale: 0.9, opacity: 0 }} 
+                    className="absolute right-0 mt-8 w-48 bg-[#0b0e14] border border-white/10 rounded-2xl shadow-2xl p-2 z-[150] text-white"
+                  >
+                    <button onClick={() => handleTogglePinChat(s)} className="w-full p-3 hover:bg-white/5 text-left text-[10px] font-black uppercase tracking-widest flex items-center gap-2 rounded-xl transition-colors">{s.is_pinned ? <><PinOff size={14}/> Unpin</> : <><Pin size={14}/> Pin</>}</button>
+                    <button onClick={() => handleRenameChat(s.id, s.title)} className="w-full p-3 hover:bg-white/5 text-left text-[10px] font-black uppercase tracking-widest flex items-center gap-2 rounded-xl transition-colors"><Edit2 size={14}/> Rename</button>
+                    <button onClick={() => handleDeleteChat(s.id)} className="w-full p-3 hover:bg-red-500/10 text-red-500 text-left text-[10px] font-black uppercase tracking-widest flex items-center gap-2 rounded-xl transition-colors"><Trash2 size={14}/> Delete</button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ))}
+        </div>
+      </aside>
+
+      {/* MAIN CONTENT */}
+      <main className="flex-grow flex h-full relative overflow-hidden bg-[#030712]">
+        <AnimatePresence mode="wait">
+          {view === 'library' ? (
+            <motion.div key="library" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col h-full w-full overflow-y-auto custom-scrollbar p-10 max-w-6xl mx-auto space-y-10">
+              <header className="flex items-end justify-between text-white font-black">
+                <div>
+                  <h1 className="text-6xl font-black tracking-tightest text-white">Knowledge <span className="gradient-text">Base.</span></h1>
+                  <p className="text-gray-400 text-lg font-medium mt-3 max-w-2xl leading-relaxed">
+                    Centralize your documentation and unlock deep insights with your private AI assistant.
+                  </p>
+                </div>
+                <div className="flex gap-3">
+                  <AnimatePresence>{selectedDocs.length > 0 && (<motion.button initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }} whileHover={{ scale: 1.05 }} onClick={() => handleStartChat(selectedDocs)} className="px-8 py-3 bg-accent text-white rounded-2xl font-black text-sm shadow-xl shadow-accent/20 flex items-center gap-2 transition-all">Start Chat with {selectedDocs.length} Files</motion.button>)}</AnimatePresence>
+                  <button onClick={() => setShowFileManager(true)} className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl text-gray-300 border border-white/5 transition-all shadow-lg"><Files size={24} /></button>
+                  <button onClick={handleCreateProject} className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl text-gray-300 border border-white/5 transition-all shadow-lg"><FolderPlus size={24} /></button>
+                </div>
+              </header>
+
+              <div className="grid grid-cols-1 gap-10 pb-20 text-white font-black">
+                {projects.map(proj => {
+                  const readyDocIds = proj.documents.filter(d => d.status === 'ready').map(d => d.id);
+                  const isAllSelected = readyDocIds.length > 0 && readyDocIds.every(id => selectedDocs.includes(id));
+                  return (
+                    <section key={proj.id} className="space-y-4">
+                      <div className="flex items-center justify-between px-2">
+                        <div className="flex items-center gap-3"><Folder className="text-primary" size={24} /><h3 className="text-xl font-bold text-white">{proj.name}</h3><span className="text-xs font-bold text-gray-500 bg-white/5 px-2 py-1 rounded-md">{proj.documents.length} Files</span></div>
+                        <div className="flex items-center gap-4">
+                          <button onClick={() => handleSelectAllInProject(proj.documents)} className="text-[10px] font-black uppercase text-gray-500 hover:text-white transition-colors">{isAllSelected ? 'Deselect All' : 'Select All Ready'}</button>
+                          <button onClick={() => { setAttachToProjectId(proj.id); setShowAttachModal(true); }} className="text-gray-500 hover:text-white transition-colors" title="Attach Existing"><LinkIcon size={18} /></button>
+                          <button onClick={() => handleEditProject(proj.id, proj.name)} className="text-gray-500 hover:text-white transition-colors"><Edit2 size={18} /></button>
+                          <label className="cursor-pointer text-gray-500 hover:text-white transition-colors"><Upload size={18} /><input type="file" multiple className="hidden" onChange={(e) => handleFileUpload(proj.id, e)} /></label>
+                          <button onClick={() => handleDeleteProject(proj.id)} className="text-gray-500 hover:text-red-500 transition-colors"><Trash2 size={18} /></button>
                         </div>
-                      ))}
+                      </div>
+                      <div className="bg-white/[0.02] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+                        {proj.documents.map((doc) => {
+                          const isSelected = selectedDocs.includes(doc.id);
+                          return (
+                            <div key={doc.id} className={`px-8 py-5 flex items-center justify-between transition-all border-b border-white/5 last:border-b-0 hover:bg-white/[0.03] ${isSelected ? 'bg-primary/5' : ''}`}>
+                              <div className="flex items-center gap-4 flex-grow min-w-0"><FileText size={18} className="text-gray-600" /><p className="text-sm font-bold text-white truncate">{doc.filename}</p></div>
+                              <div className="flex items-center gap-6">
+                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${doc.status === 'ready' ? 'bg-green-500/10 text-green-400' : 'bg-yellow-500/10 text-yellow-400'}`}>{doc.status}</span>
+                                <div className="flex items-center gap-2 border-l border-white/10 pl-6">
+                                  <button onClick={() => handleEditDoc(doc.id, doc.filename)} className="p-2 text-gray-500 hover:text-white transition-colors"><Edit2 size={14} /></button>
+                                  <button onClick={() => handleDeleteDoc(doc.id, false)} className="p-2 text-gray-500 hover:text-red-500 transition-colors"><X size={14} /></button>
+                                  <button onClick={() => doc.status === 'ready' && toggleDocSelection(doc.id)} className="ml-4">{isSelected ? <CheckCircle size={22} className="text-primary shadow-[0_0_15px_rgba(99,102,241,0.5)]" /> : <Circle size={22} className="text-gray-800 hover:text-gray-600" />}</button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex w-full h-full relative">
+              
+              <div className={`flex-grow flex flex-col h-full transition-all duration-500 ${previewDocId ? 'w-1/2 border-r border-white/5' : 'w-full'}`}>
+                <header className="flex-shrink-0 py-6 px-10 flex items-center justify-between border-b border-white/5 text-white">
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => { setView('library'); setPreviewDocId(null); setPreviewUrl(null); }} className="p-2 hover:bg-white/5 rounded-full text-gray-400"><ArrowLeft size={20} /></button>
+                    <h3 className="font-black text-xl text-white">{sessions.find(s => s.id === activeSessionId)?.title}</h3>
+                  </div>
+                  {previewDocId && <button onClick={() => { setPreviewDocId(null); setPreviewUrl(null); }} className="flex items-center gap-2 text-[10px] font-black uppercase text-gray-500 hover:text-white"><Minimize2 size={14}/> Close Preview</button>}
+                </header>
+
+                <div className="flex-grow overflow-y-auto custom-scrollbar pt-10 pb-40 px-10">
+                  <div className={`max-w-4xl mx-auto space-y-12 ${previewDocId ? 'max-w-full' : ''}`}>
+                    {messages.map((msg, i) => (
+                      <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[90%] ${msg.role === 'user' ? 'bg-white/5 p-6 rounded-[2rem] border border-white/5 shadow-xl' : ''}`}>
+                          {msg.role === 'assistant' && (
+                            <div className="flex items-center gap-3 mb-4">
+                              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center font-black text-[10px] shadow-lg shadow-primary/30">AI</div>
+                              <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Assistant</span>
+                            </div>
+                          )}
+                          <div className="text-[16px] leading-[1.8] text-gray-200 prose prose-invert prose-sm max-w-none font-medium">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                          </div>
+                          {msg.sources?.length ? (
+                            <div className="mt-8 pt-4 border-t border-white/10 flex flex-wrap gap-2 text-white font-black">
+                              {msg.sources.map((s, si) => <button key={si} onClick={() => handleSourceClick(s.document_id, s.page)} className="px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-[10px] font-black text-gray-500 uppercase border border-white/5 transition-all flex items-center gap-2"><BookOpen size={12}/> {s.source} (p. {s.page})</button>)}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={chatEndRef} />
+                  </div>
+                </div>
+
+                <div className="absolute bottom-10 left-0 right-0 px-6 z-20">
+                  <div className="max-w-4xl mx-auto relative group">
+                    <div className="absolute -inset-1 bg-gradient-to-r from-primary/50 to-accent/50 rounded-[2.5rem] opacity-0 blur-2xl group-focus-within:opacity-20 transition-all duration-700" />
+                    <form onSubmit={handleAsk} className="relative bg-[#0b0e14]/80 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] p-3 flex items-center gap-3 shadow-2xl">
+                      <button type="button" onClick={() => setView('library')} className="p-4 text-gray-500 hover:text-white hover:bg-white/5 rounded-full transition-all"><Plus size={24} /></button>
+                      <input type="text" placeholder="Ask a question..." value={question} onChange={(e) => setQuestion(e.target.value)} disabled={asking} className="flex-grow bg-transparent px-2 py-4 text-white font-medium outline-none text-lg" />
+                      <button type="submit" disabled={!question.trim() || asking} className="w-14 h-14 bg-primary text-white rounded-full flex items-center justify-center hover:scale-105 active:scale-90 transition-all shadow-xl shadow-primary/20 disabled:opacity-50"><Send size={24} /></button>
+                    </form>
+                  </div>
+                </div>
+              </div>
+
+              <AnimatePresence>
+                {previewDocId && (
+                  <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }} className="w-1/2 h-full bg-[#0b0e14] flex flex-col shadow-[-20px_0_50px_rgba(0,0,0,0.5)]">
+                    <header className="p-4 border-b border-white/5 flex items-center justify-between bg-black/20 text-white">
+                      <div className="flex items-center gap-3"><div className="p-2 bg-primary/20 text-primary rounded-lg"><FileText size={18} /></div><p className="text-sm font-bold text-white truncate max-w-[200px]">{allDocs.find(d => d.id === previewDocId)?.filename}</p></div>
+                      <div className="flex items-center gap-4"><span className="text-[10px] font-black text-gray-500 uppercase tracking-widest bg-white/5 px-2 py-1 rounded">Page {previewPage}</span><button onClick={() => { setPreviewDocId(null); setPreviewUrl(null); }} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X size={20} /></button></div>
+                    </header>
+                    <div className="flex-grow bg-[#1a1d23] relative">
+                      {loadingPdf && <div className="absolute inset-0 flex items-center justify-center bg-[#0b0e14]/50 z-30"><Loader2 className="animate-spin text-primary" size={32} /></div>}
+                      {previewUrl && (
+                        <iframe key={`${previewUrl}-${previewPage}`} src={`${previewUrl}#page=${previewPage}&toolbar=0&navpanes=0`} className="w-full h-full border-none" title="PDF Preview" />
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </main>
+
+      {/* GLOBAL MODALS */}
+      <AnimatePresence>
+        {showFileManager && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-xl text-white font-black">
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="w-full max-w-5xl h-[85vh] bg-[#0b0e14] rounded-[3rem] border border-white/10 shadow-2xl flex flex-col overflow-hidden text-white font-black">
+              <header className="p-8 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
+                <div className="flex items-center gap-4"><div className="w-12 h-12 bg-primary text-white rounded-2xl flex items-center justify-center shadow-lg shadow-primary/20"><Files size={24} /></div><div className="flex-grow font-black font-black uppercase"><h2 className="text-3xl font-black tracking-tighter text-white font-black uppercase">Library</h2><p className="text-sm text-gray-500 font-bold uppercase tracking-widest text-white">Document Management</p></div></div>
+                <div className="flex items-center gap-4">
+                  <button onClick={(e) => { e.stopPropagation(); handleSelectAllInModal(); }} className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest border border-white/10 transition-all flex items-center gap-2">
+                    {allDocs.filter(d => d.status === 'ready').length > 0 && allDocs.filter(d => d.status === 'ready').every(id => modalSelectedDocs.includes(id.id)) && modalSelectedDocs.length > 0 ? <CheckSquare size={14}/> : <Square size={14}/>}
+                    Select All
+                  </button>
+                  {modalSelectedDocs.length > 0 && (
+                    <div className="flex gap-3">
+                      <button onClick={(e) => { e.stopPropagation(); handleBulkDelete(modalSelectedDocs, true); }} className="px-6 py-2.5 bg-red-500 text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg shadow-red-500/20"><Trash2 size={14} /> Delete</button>
+                      <button onClick={(e) => { e.stopPropagation(); handleCreateProjectWithDocs(); }} className="px-6 py-2.5 bg-accent text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg shadow-accent/20">New Project</button>
+                      <div className="relative">
+                        <button onClick={(e) => { e.stopPropagation(); setIsMoveMenuOpen(!isMoveMenuOpen); }} className="px-6 py-2.5 bg-primary text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg shadow-primary/20">Move to... <ChevronDown size={14} /></button>
+                        <AnimatePresence>{isMoveMenuOpen && (<motion.div onClick={(e) => e.stopPropagation()} initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} className="absolute right-0 mt-2 w-64 bg-[#0b0e14] border border-white/10 rounded-2xl shadow-2xl p-2 z-[110] text-white font-black"><p className="px-4 py-2 text-[10px] font-bold text-gray-500 uppercase border-b border-white/5 mb-2 font-bold">Target Project</p>{projects.map(p => (<button key={p.id} onClick={() => { handleBulkMove(p.id, modalSelectedDocs); setModalSelectedDocs([]); setIsMoveMenuOpen(false); }} className="w-full p-3 hover:bg-primary/10 text-left text-xs font-bold rounded-xl flex items-center justify-between group transition-colors text-white font-bold">{p.name}<ArrowRight size={12} className="opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all text-white font-bold" /></button>))}</motion.div>)}</AnimatePresence>
+                      </div>
                     </div>
                   )}
+                  <button onClick={() => setShowFileManager(false)} className="p-3 hover:bg-white/5 rounded-2xl text-gray-500 transition-all"><X size={24} /></button>
                 </div>
-              </motion.div>
-            ))
-          )}
-          {asking && (
-            <div className="flex justify-start">
-              <div className="bg-white/5 p-5 rounded-3xl rounded-bl-none border border-white/5 flex gap-2 items-center">
-                <Loader2 size={16} className="animate-spin text-primary" />
-                <span className="text-sm font-bold text-gray-500 uppercase tracking-widest">AI is thinking...</span>
+              </header>
+              <div className="flex-grow overflow-y-auto custom-scrollbar text-white font-black">
+                {allDocs.map(doc => {
+                  const isSelected = modalSelectedDocs.includes(doc.id);
+                  const proj = projects.find(p => p.id === doc.project_id);
+                  return (
+                    <div key={doc.id} className={`px-10 py-5 flex items-center justify-between border-b border-white/5 hover:bg-white/[0.02] transition-all ${isSelected ? 'bg-primary/5' : ''}`}>
+                      <div className="flex items-center gap-6"><div onClick={(e) => { e.stopPropagation(); doc.status === 'ready' && toggleDocSelection(doc.id, 'modal'); }} className="cursor-pointer text-white font-black">{isSelected ? <CheckCircle size={24} className="text-primary shadow-[0_0_15px_rgba(99,102,241,0.5)]" /> : <Circle size={24} className="text-gray-800" />}</div><div className="flex items-center gap-4 text-white font-black"><FileText size={20} className="text-gray-600 font-black" /><p className="text-sm font-bold text-white truncate max-w-xs">{doc.filename}</p><span className="px-2 py-0.5 bg-white/5 text-gray-500 rounded text-[9px] font-black uppercase">{proj?.name || 'Unassigned'}</span></div></div>
+                      <div className="flex items-center gap-4 text-white font-black">
+                        <button onClick={(e) => { e.stopPropagation(); handleEditDoc(doc.id, doc.filename); }} className="p-2 text-gray-600 hover:text-white transition-all"><Edit2 size={16} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); handleDeleteDoc(doc.id, true); }} className="p-2 text-gray-600 hover:text-red-500 transition-all"><Trash2 size={18} /></button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            </div>
-          )}
-          <div ref={chatEndRef} />
-        </div>
+              <footer className="p-8 bg-white/[0.02] border-t border-white/10 flex justify-center gap-4 text-white font-black font-black uppercase font-black">
+                {modalSelectedDocs.length > 0 && (<button onClick={() => handleStartChat(modalSelectedDocs)} className="px-10 py-4 bg-accent text-white rounded-2xl font-black text-sm shadow-xl shadow-accent/30 hover:scale-105 transition-all text-white font-black">Start Chat with Selected</button>)}
+                <label className="px-10 py-4 bg-white/5 hover:bg-white/10 text-white rounded-2xl font-black text-sm border border-white/10 transition-all cursor-pointer flex items-center gap-2 font-black font-black uppercase"><Upload size={18}/> Upload New Files<input type="file" multiple className="hidden" onChange={(e) => handleFileUpload(null, e)} /></label>
+              </footer>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
-        {/* Chat Input */}
-        <div className="p-6 bg-white/5 border-t border-white/5">
-          <form onSubmit={handleAsk} className="relative group">
-            <input
-              type="text"
-              placeholder={documents.some(d => d.status === 'ready') ? "Ask a question..." : "Waiting for ready documents..."}
-              disabled={asking || !documents.some(d => d.status === 'ready')}
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              className="w-full pl-6 pr-16 py-5 bg-[#030712] border border-white/10 rounded-2xl text-white font-medium outline-none focus:border-primary focus:ring-4 ring-primary/10 transition-all placeholder:text-gray-600 disabled:opacity-50"
-            />
-            <button
-              type="submit"
-              disabled={asking || !question.trim()}
-              className="absolute right-3 top-1/2 -translate-y-1/2 w-12 h-12 bg-primary text-white rounded-xl flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-lg shadow-primary/20 disabled:opacity-50 disabled:grayscale"
-            >
-              <Send size={20} />
-            </button>
-          </form>
-          <p className="mt-3 text-[10px] text-center text-gray-600 font-bold uppercase tracking-tighter">
-            AI can make mistakes. Always check the original source.
-          </p>
-        </div>
-      </div>
+      <AnimatePresence>
+        {showAttachModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm text-white text-left font-black">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="w-full max-w-2xl glass-effect rounded-[3rem] border border-white/10 shadow-2xl flex flex-col overflow-hidden text-white font-black">
+              <header className="p-8 border-b border-white/10 flex items-center justify-between bg-white/5 text-white">
+                <div><h2 className="text-2xl font-black tracking-tighter text-white font-black uppercase">Attach Files</h2><p className="text-sm text-gray-500 font-medium text-white">Add documents to <span className="text-primary font-black uppercase">{projects.find(p => p.id === attachToProjectId)?.name}</span></p></div>
+                <button onClick={() => { setShowAttachModal(false); setAttachSelectedDocs([]); }} className="p-2 text-gray-500 hover:text-white transition-colors bg-white/5 rounded-xl"><X size={24} /></button>
+              </header>
+              <div className="flex-grow overflow-y-auto p-8 space-y-3 custom-scrollbar text-white font-black">
+                {allDocs.filter(d => d.project_id !== attachToProjectId).map(doc => {
+                  const isSelected = attachSelectedDocs.includes(doc.id);
+                  return (
+                    <div key={doc.id} onClick={() => doc.status === 'ready' && toggleDocSelection(doc.id, 'attach')} className={`p-4 rounded-2xl border flex items-center justify-between cursor-pointer transition-all ${isSelected ? 'bg-primary/10 border-primary' : 'bg-white/5 border-white/5 hover:border-white/10'}`}>
+                      <div className="flex items-center gap-3 min-w-0 text-white font-black uppercase tracking-widest"><FileText className={doc.status === 'ready' ? 'text-green-400' : 'text-yellow-400'} size={18} /><p className="text-sm font-bold truncate text-white">{doc.filename}</p></div>
+                      {isSelected ? <CheckCircle size={20} className="text-primary" /> : <Circle size={20} className="text-gray-600" />}
+                    </div>
+                  );
+                })}
+              </div>
+              <footer className="p-6 bg-white/5 border-t border-white/10 flex justify-end gap-4 text-white font-black uppercase tracking-widest">
+                <button onClick={() => { setShowAttachModal(false); setAttachSelectedDocs([]); }} className="px-6 py-3 text-sm font-bold text-gray-400 hover:text-white text-white font-black">Cancel</button>
+                <button onClick={handleAttachDocs} disabled={attachSelectedDocs.length === 0} className="px-8 py-3 bg-primary text-white rounded-2xl font-black text-sm shadow-xl shadow-primary/20 disabled:opacity-50 font-black uppercase tracking-widest">Attach Selected</button>
+              </footer>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

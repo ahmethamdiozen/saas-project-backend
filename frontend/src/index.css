@@ -28,6 +28,18 @@ body {
   display: flex;
   min-width: 320px;
   min-height: 100vh;
+  cursor: default;
+}
+
+/* Global Pointer Enhancements */
+button, 
+a, 
+input[type="checkbox"], 
+input[type="file"],
+label,
+[role="button"],
+.clickable {
+  cursor: pointer !important;
 }
 
 #root {
@@ -50,4 +62,21 @@ body {
 
 .nav-link-hover {
   @apply relative after:absolute after:bottom-0 after:left-0 after:h-0.5 after:w-0 after:bg-primary after:transition-all hover:after:w-full;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }

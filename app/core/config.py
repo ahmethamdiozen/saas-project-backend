@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Union, Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field, AnyHttpUrl, field_validator
 
@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     # Core Security
     SECRET_KEY: str = Field(..., env="SECRET_KEY")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 # Token expiry increased for convenience
     
     # Database
     DATABASE_URL: str = Field(..., env="DATABASE_URL")
@@ -19,11 +19,18 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str = Field(..., env="OPENAI_API_KEY")
 
-    # RAG / Storage
+    # AWS S3 Storage
+    AWS_ACCESS_KEY_ID: Optional[str] = Field(None, env="AWS_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY: Optional[str] = Field(None, env="AWS_SECRET_ACCESS_KEY")
+    AWS_REGION: str = Field("eu-central-1", env="AWS_REGION")
+    AWS_S3_BUCKET: Optional[str] = Field(None, env="AWS_S3_BUCKET")
+    USE_S3: bool = Field(False, env="USE_S3") # Toggle between local and S3
+
+    # Local Storage Fallback
     UPLOAD_DIR: str = "uploads"
     CHROMA_DB_DIR: str = "chroma_db"
     
-    # Existing fields
+    # Redis
     REDIS_URL: str = Field("redis://localhost:6379/0", env="REDIS_URL")
 
     # CORS Configuration

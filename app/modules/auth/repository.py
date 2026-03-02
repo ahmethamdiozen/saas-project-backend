@@ -36,3 +36,9 @@ def get_valid_refresh_token(db: Session, token_hash: str) -> RefreshToken | None
         return None
     
     return token
+
+def revoke_refresh_token(db: Session, token_hash: str):
+    token = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
+    if token:
+        token.revoked_at = datetime.now(timezone.utc)
+        db.commit()
