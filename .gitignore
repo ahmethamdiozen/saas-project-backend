@@ -6,3 +6,10 @@ __pycache__/
 .vscode/
 .cursor/
 
+# Storage
+uploads/
+chroma_db/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
