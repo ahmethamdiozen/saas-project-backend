@@ -108,7 +108,7 @@ export default function Dashboard() {
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // --- FETCHING ---
-  const fetchData = async () => {
+  const fetchData = async (silent = false) => {
     try {
       const [projRes, docsRes, sessionRes] = await Promise.all([
         api.get('/rag/projects'),
@@ -121,15 +121,22 @@ export default function Dashboard() {
     } catch (err) { 
       console.error('Dashboard data fetch failed');
     } finally { 
-      setLoading(false); 
+      if (!silent) setLoading(false); 
     }
   };
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 10000); 
-    return () => clearInterval(interval);
   }, []);
+
+  // Smarter polling: only poll when there are files in 'processing' status
+  useEffect(() => {
+    const hasProcessing = allDocs.some(d => d.status === 'processing');
+    const intervalTime = hasProcessing ? 5000 : 30000; // Poll every 5s if processing, otherwise every 30s
+    
+    const interval = setInterval(() => fetchData(true), intervalTime);
+    return () => clearInterval(interval);
+  }, [allDocs]);
 
   useEffect(() => {
     if (activeSessionId) fetchMessages(activeSessionId);
@@ -143,7 +150,6 @@ export default function Dashboard() {
     return () => { if (previewUrl) URL.revokeObjectURL(previewUrl); };
   }, [previewUrl]);
 
-  // Click outside listener for chat history menu
   useEffect(() => {
     const handleClickOutside = () => setOpenChatMenuId(null);
     document.addEventListener('click', handleClickOutside);
@@ -167,7 +173,7 @@ export default function Dashboard() {
         try {
           await api.post('/rag/projects', { name });
           showToast("Project created successfully!");
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showToast("Failed to create project", "error");
         }
@@ -187,7 +193,7 @@ export default function Dashboard() {
           await api.post('/rag/documents/bulk-move', { document_ids: modalSelectedDocs, project_id: projRes.data.id });
           setModalSelectedDocs([]);
           showToast("Project created with documents!");
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showToast("Operation failed", "error");
         }
@@ -204,7 +210,7 @@ export default function Dashboard() {
         try {
           await api.patch(`/rag/projects/${id}`, { name: newName });
           showToast("Project renamed");
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showToast("Rename failed", "error");
         }
@@ -221,7 +227,7 @@ export default function Dashboard() {
         try {
           await api.delete(`/rag/projects/${id}`);
           showToast("Project deleted");
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showToast("Delete failed", "error");
         }
@@ -239,7 +245,7 @@ export default function Dashboard() {
       const url = projectId ? `/rag/upload?project_id=${projectId}` : '/rag/upload';
       await api.post(url, formData);
       showToast(`Uploading ${files.length} files...`, "info");
-      fetchData();
+      fetchData(true);
     } catch (err) {
       showToast("Upload failed", "error");
     } finally {
@@ -256,7 +262,7 @@ export default function Dashboard() {
         try {
           await api.patch(`/rag/documents/${id}`, { filename: newName });
           showToast("File renamed");
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showToast("Rename failed", "error");
         }
@@ -274,7 +280,7 @@ export default function Dashboard() {
         try {
           await api.delete(`/rag/documents/${id}${permanent ? '?permanent=true' : ''}`);
           showToast(permanent ? "File deleted permanently" : "File removed from project");
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showToast("Operation failed", "error");
         }
@@ -292,7 +298,7 @@ export default function Dashboard() {
           await api.post('/rag/documents/bulk-delete', { document_ids: docIds, permanent });
           if (permanent) setModalSelectedDocs([]); else setSelectedDocs([]);
           showToast("Bulk operation successful");
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showToast("Bulk operation failed", "error");
         }
@@ -304,7 +310,7 @@ export default function Dashboard() {
     try {
       await api.post('/rag/documents/bulk-move', { document_ids: docIds, project_id: targetProjectId });
       showToast(`Moved ${docIds.length} files`);
-      fetchData();
+      fetchData(true);
     } catch (err) {
       showToast("Move failed", "error");
     }
@@ -326,7 +332,7 @@ export default function Dashboard() {
           await api.patch(`/rag/chats/${id}`, { title: newTitle });
           setOpenChatMenuId(null);
           showToast("Chat renamed");
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showToast("Rename failed", "error");
         }
@@ -339,7 +345,7 @@ export default function Dashboard() {
       await api.patch(`/rag/chats/${session.id}`, { is_pinned: !session.is_pinned });
       setOpenChatMenuId(null);
       showToast(session.is_pinned ? "Chat unpinned" : "Chat pinned");
-      fetchData();
+      fetchData(true);
     } catch (err) {
       showToast("Operation failed", "error");
     }
@@ -359,7 +365,7 @@ export default function Dashboard() {
           }
           setOpenChatMenuId(null);
           showToast("Chat deleted");
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showToast("Delete failed", "error");
         }
@@ -428,13 +434,13 @@ export default function Dashboard() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: userQ }),
-        credentials: 'include' // CRITICAL: Send cookies with fetch
+        credentials: 'include' 
       });
 
       if (response.status === 401) {
         try {
           await api.post('/auth/refresh', {});
-          return performStream(); // Retry after refresh
+          return performStream(); 
         } catch (e) {
           window.location.href = '/login';
           return;
@@ -459,7 +465,7 @@ export default function Dashboard() {
     try {
       await performStream();
     } catch (err) {
-      console.error('Streaming error:', err);
+      showToast("AI response failed", "error");
       setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, content: 'Error getting response.' } : m));
     } finally {
       setAsking(false);
