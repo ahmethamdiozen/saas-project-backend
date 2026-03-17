@@ -1,18 +1,18 @@
 import time
-from fastapi import Request, HTTPException, status, Depends
+from fastapi import HTTPException, status, Depends
+from starlette.requests import HTTPConnection
 from sqlalchemy.orm import Session
 from app.worker.redis_client import redis_client
 from app.core.logging import logger
 from app.db.session import get_db
 from app.modules.subscriptions.service import get_user_active_subscription
-from app.modules.users.repository import get_user_by_id
 from app.core.security import decode_token
 
 # Default rate limits for unauthenticated users (per IP) - INCREASED FOR DEV
-DEFAULT_ANONYMOUS_LIMIT = 500 
+DEFAULT_ANONYMOUS_LIMIT = 500
 
 async def rate_limiter(
-    request: Request,
+    request: HTTPConnection,
     db: Session = Depends(get_db)
 ):
     # Identifiers
