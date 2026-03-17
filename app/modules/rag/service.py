@@ -132,10 +132,14 @@ class RAGService:
         if selected_document_ids:
             search_kwargs["filter"] = {"document_id": {"$in": [str(sid) for sid in selected_document_ids]}}
 
-        RELEVANCE_THRESHOLD = 0.38
         docs_with_scores = vector_db.similarity_search_with_score(question, k=5, **search_kwargs)
-        
-        filtered_docs = [doc for doc, score in docs_with_scores if score < RELEVANCE_THRESHOLD]
+
+        # Pinecone returns cosine similarity (higher = better, threshold > 0.38)
+        # ChromaDB returns L2 distance (lower = better, threshold < 0.38)
+        if settings.USE_PINECONE:
+            filtered_docs = [doc for doc, score in docs_with_scores if score > 0.38]
+        else:
+            filtered_docs = [doc for doc, score in docs_with_scores if score < 0.38]
 
         context_parts = []
         sources = []

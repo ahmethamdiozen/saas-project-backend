@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import traceback
 from datetime import datetime, timezone
@@ -9,6 +10,14 @@ from app.modules.rag.models import Document
 from app.modules.rag.service import rag_service
 from app.core.storage import storage
 from app.core.logging import logger
+from app.worker.redis_client import redis_client
+
+
+def _publish(user_id: str, data: dict):
+    try:
+        redis_client.publish(f"user:{user_id}:events", json.dumps(data))
+    except Exception as e:
+        logger.error(f"Redis publish error: {e}")
 
 def process_job(job_id: str):
     db = SessionLocal()
@@ -47,6 +56,13 @@ def process_job(job_id: str):
                         doc.page_count = page_count
                         db.commit() # Commit document status change immediately
                         logger.info(f"Document {doc.id} marked as READY")
+                        _publish(str(job.user_id), {
+                            "type": "document_status",
+                            "document_id": str(doc.id),
+                            "status": "ready",
+                            "page_count": page_count,
+                            "filename": doc.filename,
+                        })
                         
                         if os.path.exists(download_path):
                             os.remove(download_path)
@@ -57,6 +73,13 @@ def process_job(job_id: str):
                     logger.error(f"Internal error during document processing {doc_id}: {str(e)}\n{error_trace}")
                     doc.status = "error"
                     db.commit()
+                    _publish(str(job.user_id), {
+                        "type": "document_status",
+                        "document_id": str(doc.id),
+                        "status": "error",
+                        "page_count": None,
+                        "filename": doc.filename,
+                    })
             
         job.status = JobStatus.SUCCESS.value
         job.finished_at = datetime.now(timezone.utc)

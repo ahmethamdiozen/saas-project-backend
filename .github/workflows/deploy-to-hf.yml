@@ -1,0 +1,26 @@
+name: Deploy to HuggingFace Spaces
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Push to HuggingFace Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git remote add hf https://ahmethamdiozen:$HF_TOKEN@huggingface.co/spaces/ahmethamdiozen/rag-document-manager
+          git push hf main --force

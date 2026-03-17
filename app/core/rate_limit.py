@@ -21,25 +21,22 @@ async def rate_limiter(
     identifier = f"rate_limit:ip:{request.client.host if request.client else 'unknown'}"
 
     try:
-        # 1. Try to get user from token
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
+        # 1. Try to get user from cookie first, then Authorization header
+        token = request.cookies.get("access_token")
+        if not token:
+            auth_header = request.headers.get("Authorization")
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header.split(" ")[1]
+
+        if token:
             payload = decode_token(token)
             user_id = payload.get("sub")
             
             if user_id:
                 identifier = f"rate_limit:user:{user_id}"
-                # Get subscription limit
                 active_sub = get_user_active_subscription(db, user_id)
-                if active_sub:
-                    # In DB we store daily jobs, etc. Let's use rate_limit_per_minute
-                    # Accessing via .subscription relationship
-                    if hasattr(active_sub, 'subscription'):
-                        limit = active_sub.subscription.rate_limit_per_minute
-                    else:
-                        # If it's a dict (from cache), handle it
-                        limit = active_sub.get('subscription', {}).get('rate_limit_per_minute', 100)
+                if active_sub and hasattr(active_sub, 'subscription') and active_sub.subscription:
+                    limit = active_sub.subscription.rate_limit_per_minute
 
     except Exception as e:
         # If anything fails during identification, we fallback to IP-based limit
