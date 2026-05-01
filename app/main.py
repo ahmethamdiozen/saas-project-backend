@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, status, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from app.modules.auth.router import router as auth_router
 from app.modules.users.router import router as user_router
 from app.modules.jobs.router import router as jobs_router
@@ -12,6 +13,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.core.rate_limit import rate_limiter
 from app.db import models
+from app.db.session import get_db
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -21,12 +23,12 @@ app = FastAPI(
     dependencies=[Depends(rate_limiter)]
 )
 
-# CORS Middleware Setup - SHOULD BE FIRST
 origins = [str(origin) for origin in settings.BACKEND_CORS_ORIGINS]
-if "http://localhost:5173" not in origins:
-    origins.append("http://localhost:5173")
-if "http://127.0.0.1:5173" not in origins:
-    origins.append("http://127.0.0.1:5173")
+if settings.ENVIRONMENT != "production":
+    if "http://localhost:5173" not in origins:
+        origins.append("http://localhost:5173")
+    if "http://127.0.0.1:5173" not in origins:
+        origins.append("http://127.0.0.1:5173")
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,8 +56,15 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Health Check Endpoint
 @app.get("/health", tags=["Infrastructure"])
-async def health_check():
-    return {"status": "healthy", "version": settings.VERSION}
+async def health_check(db=Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "healthy", "version": settings.VERSION, "db": "ok"}
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "version": settings.VERSION, "db": "error"}
+        )
 
 # Include Routers
 app.include_router(auth_router, prefix=f"{settings.API_V1_STR}/auth", tags=["Authentication"])

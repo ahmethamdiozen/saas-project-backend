@@ -57,7 +57,7 @@ def create_job(db: Session, user_id):
         str(job.id),
         retry=Retry(
             max=3,
-            interval={10, 30, 120}
+            interval=[10, 30, 120]
         ),
         job_timeout=300
     )

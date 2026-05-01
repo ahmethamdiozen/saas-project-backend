@@ -35,7 +35,7 @@ def process_job(job_id: str):
         logger.info(f"Job {job_id} status set to RUNNING")
 
         if job.job_type == "rag_ingestion":
-            doc_id = job.job_metadata.get("document_id")
+            doc_id = (job.job_metadata or {}).get("document_id")
             doc = db.query(Document).filter(Document.id == doc_id).first()
             if doc:
                 try:

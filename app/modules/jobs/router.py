@@ -128,7 +128,7 @@ def cancel_job(
     
     # ownership check
     if job.user_id != current_user.id:
-        raise HTTPException((403, "Not allowed"))
+        raise HTTPException(status_code=403, detail="Not allowed")
 
     # only PENDING and RUNNING jobs can be cancelled.
     if job.status not in (
