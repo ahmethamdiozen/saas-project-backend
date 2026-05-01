@@ -14,3 +14,5 @@ chroma_db/
 frontend/
 node_modules/
 dist/
+
+saas-admin_accessKeys.csv
