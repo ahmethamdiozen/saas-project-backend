@@ -9,7 +9,7 @@ from sqlalchemy import desc
 from typing import List, Optional, Dict
 from pydantic import BaseModel
 
-from app.db.session import get_db, SessionLocal
+from app.db.session import get_db
 from app.core.config import settings
 from app.core.storage import storage # Use the new storage abstraction
 from app.modules.auth.dependencies import get_current_user
@@ -58,7 +58,9 @@ class QuestionRequest(BaseModel):
     question: str
 
 # --- SAVE MESSAGE HELPER ---
+# Background task — cannot use DI, so SessionLocal is correct here
 def save_chat_message(session_id: uuid.UUID, role: str, content: str, sources: Optional[List[Dict]] = None):
+    from app.db.session import SessionLocal
     db = SessionLocal()
     try:
         msg = ChatMessage(session_id=session_id, role=role, content=content, sources=sources)
@@ -110,18 +112,19 @@ def list_all_documents(project_id: Optional[uuid.UUID] = Query(None), only_unass
     return query.order_by(desc(Document.created_at)).all()
 
 @router.get("/documents/{doc_id}/file")
-def get_document_file(doc_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_document_file(doc_id: uuid.UUID, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     doc = db.query(Document).filter(Document.id == doc_id, Document.user_id == current_user.id).first()
     if not doc: raise HTTPException(404, "Document not found")
-    
-    # If S3, we download to a temporary file then serve
-    import tempfile
+
     file_key = f"{doc.id}.pdf"
-    
+
     if settings.USE_S3:
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        storage.download_file(file_key, temp_file.name)
-        return FileResponse(temp_file.name, media_type="application/pdf", filename=doc.filename)
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp_path = tmp.name
+        storage.download_file(file_key, tmp_path)
+        background_tasks.add_task(os.unlink, tmp_path)
+        return FileResponse(tmp_path, media_type="application/pdf", filename=doc.filename)
     else:
         if not os.path.exists(doc.file_path): raise HTTPException(404, "File not found")
         return FileResponse(doc.file_path, media_type="application/pdf")
