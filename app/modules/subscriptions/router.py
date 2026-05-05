@@ -8,7 +8,7 @@ from app.modules.subscriptions.service import (
     get_user_active_subscription,
     get_subscription_tier_by_name
 )
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, get_admin_user
 from app.modules.users.models import User
 
 router = APIRouter()
@@ -16,7 +16,8 @@ router = APIRouter()
 @router.post("/tiers", response_model=SubscriptionRead, status_code=status.HTTP_201_CREATED)
 def create_tier(
     payload: SubscriptionCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: User = Depends(get_admin_user),
 ):
     existing = get_subscription_tier_by_name(db, payload.name)
     if existing:
