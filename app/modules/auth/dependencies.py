@@ -36,7 +36,9 @@ def get_current_user(
     user = get_user_by_id(db, user_id)
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")
-    
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is banned")
+
     return user
 
 def get_admin_user(current_user: User = Depends(get_current_user)):
