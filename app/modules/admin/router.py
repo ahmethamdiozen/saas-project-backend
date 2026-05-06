@@ -117,6 +117,58 @@ def unban_user(
     return {"message": f"{user.email} has been unbanned"}
 
 
+@router.get("/subscriptions/tiers")
+def list_subscription_tiers(
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    tiers = db.query(Subscription).order_by(Subscription.name).all()
+    return [
+        {
+            "id": str(t.id),
+            "name": t.name,
+            "job_limit": t.job_limit,
+            "rate_limit_per_minute": t.rate_limit_per_minute,
+            "max_concurrent_jobs": t.max_concurrent_jobs,
+        }
+        for t in tiers
+    ]
+
+
+@router.post("/users/{user_id}/subscription")
+def assign_subscription(
+    user_id: uuid.UUID,
+    tier_name: str = Query(..., description="Subscription tier name (e.g. Free, Pro)"),
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    tier = get_subscription_tier_by_name(db, tier_name)
+    if not tier:
+        raise HTTPException(status_code=404, detail=f"Subscription tier '{tier_name}' not found")
+    assign_subscription_to_user(db, user_id=user_id, tier_id=tier.id)
+    return {"message": f"{user.email} assigned to '{tier_name}' plan"}
+
+
+@router.patch("/users/{user_id}/role")
+def update_user_role(
+    user_id: uuid.UUID,
+    role: str = Query(..., description="New role: 'user' or 'admin'"),
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    if role not in ("user", "admin"):
+        raise HTTPException(status_code=400, detail="Role must be 'user' or 'admin'")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.role = role
+    db.commit()
+    return {"message": f"{user.email} role updated to '{role}'"}
+
+
 @router.get("/jobs")
 def list_all_jobs(
     admin: User = Depends(get_admin_user),
