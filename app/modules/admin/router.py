@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from typing import Optional
+import uuid
 from app.db.session import get_db
 from app.modules.auth.dependencies import get_admin_user
 from app.modules.users.models import User
 from app.modules.jobs.models import Job, JobStatus
 from app.modules.subscriptions.models import UserSubscription, Subscription
+from app.modules.subscriptions.service import assign_subscription_to_user, get_subscription_tier_by_name
 
 router = APIRouter()
 
@@ -34,6 +37,85 @@ def get_system_stats(
         "active_jobs": active_jobs,
         "subscriptions": {name: count for name, count in sub_stats}
     }
+
+@router.get("/users")
+def list_users(
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=50, le=200),
+    offset: int = 0,
+    is_active: Optional[bool] = None,
+):
+    query = db.query(User)
+    if is_active is not None:
+        query = query.filter(User.is_active == is_active)
+    total = query.count()
+    users = query.order_by(User.created_at.desc()).offset(offset).limit(limit).all()
+    return {
+        "total": total,
+        "items": [
+            {
+                "id": str(u.id),
+                "email": u.email,
+                "role": u.role,
+                "is_active": u.is_active,
+                "created_at": u.created_at,
+            }
+            for u in users
+        ],
+    }
+
+
+@router.get("/users/{user_id}")
+def get_user_detail(
+    user_id: uuid.UUID,
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    active_sub = next((s for s in user.subscriptions if s.status == "active"), None)
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "role": user.role,
+        "is_active": user.is_active,
+        "created_at": user.created_at,
+        "subscription": active_sub.subscription.name if active_sub else None,
+        "total_jobs": len(user.jobs),
+    }
+
+
+@router.patch("/users/{user_id}/ban")
+def ban_user(
+    user_id: uuid.UUID,
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.role == "admin":
+        raise HTTPException(status_code=400, detail="Cannot ban another admin")
+    user.is_active = False
+    db.commit()
+    return {"message": f"{user.email} has been banned"}
+
+
+@router.patch("/users/{user_id}/unban")
+def unban_user(
+    user_id: uuid.UUID,
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_active = True
+    db.commit()
+    return {"message": f"{user.email} has been unbanned"}
+
 
 @router.get("/jobs")
 def list_all_jobs(
