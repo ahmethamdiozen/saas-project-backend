@@ -9,6 +9,7 @@ class UserCreate(BaseModel):
 class UserRead(BaseModel):
     id: uuid.UUID
     email: EmailStr | str
+    is_verified: bool
     created_at: datetime
 
 class LoginRequest(BaseModel):
