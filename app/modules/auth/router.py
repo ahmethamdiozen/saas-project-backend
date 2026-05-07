@@ -6,8 +6,11 @@ from app.db.session import get_db
 from app.modules.auth.dependencies import get_refresh_token_from_cookie, get_current_user
 from app.modules.users.repository import get_user_by_email, get_user_by_id
 from app.core.security import hash_password
-from app.core.tokens import create_password_reset_token, consume_password_reset_token
-from app.core.email import send_password_reset_email
+from app.core.tokens import (
+    create_password_reset_token, consume_password_reset_token,
+    create_email_verification_token, consume_email_verification_token,
+)
+from app.core.email import send_password_reset_email, send_verification_email
 from app.core.config import settings
 
 router = APIRouter()
@@ -39,7 +42,10 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str =
 @router.post("/register", response_model=UserRead)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
     try:
-        return register_user(db=db, email=payload.email, password=payload.password)
+        user = register_user(db=db, email=payload.email, password=payload.password)
+        token = create_email_verification_token(str(user.id))
+        send_verification_email(user.email, token)
+        return user
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     
@@ -66,6 +72,31 @@ def logout(response: Response, request: Request, db: Session = Depends(get_db)):
     response.delete_cookie(key="refresh_token", httponly=True, samesite="lax", secure=settings.ENVIRONMENT == "production")
     return {"message": "Logged out successfully"}
     
+@router.get("/verify-email")
+def verify_email(token: str, db: Session = Depends(get_db)):
+    user_id = consume_email_verification_token(token)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+    user = get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_verified = True
+    db.commit()
+    return {"message": "Email verified successfully"}
+
+
+@router.post("/resend-verification")
+def resend_verification(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.is_verified:
+        raise HTTPException(status_code=400, detail="Email already verified")
+    token = create_email_verification_token(str(current_user.id))
+    send_verification_email(current_user.email, token)
+    return {"message": "Verification email sent"}
+
+
 @router.post("/forgot-password")
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
     user = get_user_by_email(db, payload.email)
