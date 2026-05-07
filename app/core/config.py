@@ -50,8 +50,19 @@ class Settings(BaseSettings):
             return v
         raise ValueError(v)
 
+    # Email (SMTP)
+    SMTP_HOST: Optional[str] = Field(None, env="SMTP_HOST")
+    SMTP_PORT: int = Field(587, env="SMTP_PORT")
+    SMTP_USER: Optional[str] = Field(None, env="SMTP_USER")
+    SMTP_PASSWORD: Optional[str] = Field(None, env="SMTP_PASSWORD")
+    EMAILS_FROM_EMAIL: str = Field("noreply@saas.com", env="EMAILS_FROM_EMAIL")
+    EMAILS_FROM_NAME: str = Field("SaaS Platform", env="EMAILS_FROM_NAME")
+
+    # Frontend (used in email links)
+    FRONTEND_URL: str = Field("http://localhost:5173", env="FRONTEND_URL")
+
     # Logging & Environment
-    ENVIRONMENT: str = "development" # development, production, test
+    ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
 
     # Pydantic Settings Configuration
