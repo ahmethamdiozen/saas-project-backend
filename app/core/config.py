@@ -50,6 +50,11 @@ class Settings(BaseSettings):
             return v
         raise ValueError(v)
 
+    # Stripe
+    STRIPE_SECRET_KEY: Optional[str] = Field(None, env="STRIPE_SECRET_KEY")
+    STRIPE_PUBLISHABLE_KEY: Optional[str] = Field(None, env="STRIPE_PUBLISHABLE_KEY")
+    STRIPE_WEBHOOK_SECRET: Optional[str] = Field(None, env="STRIPE_WEBHOOK_SECRET")
+
     # Email (SMTP)
     SMTP_HOST: Optional[str] = Field(None, env="SMTP_HOST")
     SMTP_PORT: int = Field(587, env="SMTP_PORT")
