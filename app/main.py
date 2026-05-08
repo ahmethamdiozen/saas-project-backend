@@ -9,6 +9,7 @@ from app.modules.subscriptions.router import router as subscriptions_router
 from app.modules.admin.router import router as admin_router
 from app.modules.rag.router import router as rag_router
 from app.modules.ws.router import router as ws_router
+from app.modules.webhooks.stripe import router as stripe_webhook_router
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.rate_limit import rate_limiter
@@ -74,3 +75,4 @@ app.include_router(subscriptions_router, prefix=f"{settings.API_V1_STR}/subscrip
 app.include_router(rag_router, prefix=f"{settings.API_V1_STR}/rag", tags=["RAG / Documents"])
 app.include_router(admin_router, prefix=f"{settings.API_V1_STR}/admin", tags=["Admin Dashboard"])
 app.include_router(ws_router, prefix=f"{settings.API_V1_STR}", tags=["WebSocket"])
+app.include_router(stripe_webhook_router, prefix="/webhooks", tags=["Webhooks"])
