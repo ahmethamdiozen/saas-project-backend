@@ -19,6 +19,7 @@ class Subscription(Base):
     job_limit: Mapped[int] = mapped_column(Integer, nullable=False)
     rate_limit_per_minute: Mapped[int] = mapped_column(Integer, nullable=False)
     max_concurrent_jobs: Mapped[int] = mapped_column(Integer, nullable=False)
+    stripe_price_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -50,6 +51,7 @@ class UserSubscription(Base):
     )
 
     status: Mapped[str] = mapped_column(String, nullable=False)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc)
