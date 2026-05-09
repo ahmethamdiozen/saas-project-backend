@@ -9,6 +9,7 @@ from app.modules.users.models import User
 from app.modules.jobs.models import Job, JobStatus
 from app.modules.subscriptions.models import UserSubscription, Subscription
 from app.modules.subscriptions.service import assign_subscription_to_user, get_subscription_tier_by_name
+from app.modules.subscriptions.schemas import SubscriptionTierUpdate
 
 router = APIRouter()
 
@@ -133,6 +134,25 @@ def list_subscription_tiers(
         }
         for t in tiers
     ]
+
+
+@router.patch("/subscriptions/tiers/{tier_id}", response_model=None)
+def update_tier(
+    tier_id: uuid.UUID,
+    payload: SubscriptionTierUpdate,
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    tier = db.query(Subscription).filter(Subscription.id == tier_id).first()
+    if not tier:
+        raise HTTPException(status_code=404, detail="Tier not found")
+    for field, value in payload.model_dump(exclude_none=True).items():
+        setattr(tier, field, value)
+    db.commit()
+    db.refresh(tier)
+    return {"id": str(tier.id), "name": tier.name, "stripe_price_id": tier.stripe_price_id,
+            "job_limit": tier.job_limit, "rate_limit_per_minute": tier.rate_limit_per_minute,
+            "max_concurrent_jobs": tier.max_concurrent_jobs}
 
 
 @router.post("/users/{user_id}/subscription")

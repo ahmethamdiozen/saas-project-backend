@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List
 from app.db.session import get_db
-from app.modules.subscriptions.schemas import SubscriptionRead, SubscriptionCreate, UserSubscriptionRead
+from app.modules.subscriptions.schemas import SubscriptionRead, SubscriptionCreate, SubscriptionTierUpdate, UserSubscriptionRead
+from app.modules.subscriptions.models import Subscription
 from app.modules.subscriptions.service import (
     create_subscription_tier,
     get_user_active_subscription,
@@ -14,6 +15,12 @@ from app.core.config import settings
 from app.core import stripe_service
 
 router = APIRouter()
+
+
+@router.get("/tiers", response_model=List[SubscriptionRead])
+def list_tiers(db: Session = Depends(get_db)):
+    return db.query(Subscription).order_by(Subscription.name).all()
+
 
 @router.post("/tiers", response_model=SubscriptionRead, status_code=status.HTTP_201_CREATED)
 def create_tier(
