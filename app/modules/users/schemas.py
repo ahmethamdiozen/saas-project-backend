@@ -24,3 +24,10 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
 
+class UpdateProfileRequest(BaseModel):
+    email: EmailStr
+    current_password: str
+
+class DeleteAccountRequest(BaseModel):
+    current_password: str
+

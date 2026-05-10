@@ -42,3 +42,11 @@ def revoke_refresh_token(db: Session, token_hash: str):
     if token:
         token.revoked_at = datetime.now(timezone.utc)
         db.commit()
+
+def revoke_all_user_tokens(db: Session, user_id):
+    now = datetime.now(timezone.utc)
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == user_id,
+        RefreshToken.revoked_at.is_(None),
+    ).update({"revoked_at": now})
+    db.commit()
