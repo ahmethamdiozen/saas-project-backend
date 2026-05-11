@@ -17,7 +17,7 @@ from app.core import stripe_service
 router = APIRouter()
 
 
-@router.get("/tiers", response_model=List[SubscriptionRead])
+@router.get("/tiers", response_model=List[SubscriptionRead], summary="List all subscription plans")
 def list_tiers(db: Session = Depends(get_db)):
     return db.query(Subscription).order_by(Subscription.name).all()
 
@@ -34,7 +34,7 @@ def create_tier(
     
     return create_subscription_tier(db, payload)
 
-@router.get("/me", response_model=UserSubscriptionRead)
+@router.get("/me", response_model=UserSubscriptionRead, summary="Get current user's active subscription")
 def get_my_subscription(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -45,7 +45,7 @@ def get_my_subscription(
     return sub
 
 
-@router.post("/checkout")
+@router.post("/checkout", summary="Create a Stripe checkout session", description="Returns a redirect URL to complete payment on Stripe's hosted checkout page.")
 def create_checkout(
     tier_name: str = Query(..., description="Subscription tier name (e.g. Pro)"),
     current_user: User = Depends(get_current_user),
@@ -73,7 +73,7 @@ def create_checkout(
     return {"checkout_url": checkout_url}
 
 
-@router.post("/portal")
+@router.post("/portal", summary="Open Stripe billing portal", description="Returns a redirect URL to Stripe's self-service billing portal (cancel, upgrade, invoices).")
 def create_portal(
     current_user: User = Depends(get_current_user),
 ):

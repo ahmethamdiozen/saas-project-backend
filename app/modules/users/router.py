@@ -15,12 +15,17 @@ from app.core.config import settings
 router = APIRouter()
 
 
-@router.get("/me", response_model=UserRead)
+@router.get("/me", response_model=UserRead, summary="Get current user profile")
 def read_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-@router.patch("/me", response_model=UserRead)
+@router.patch(
+    "/me",
+    response_model=UserRead,
+    summary="Update email address",
+    description="Changes the account email. Requires current password. Triggers a new verification email.",
+)
 def update_profile(
     payload: UpdateProfileRequest,
     current_user: User = Depends(get_current_user),
@@ -43,7 +48,7 @@ def update_profile(
     return current_user
 
 
-@router.post("/me/change-password")
+@router.post("/me/change-password", summary="Change password", description="Requires the current password. Minimum 8 characters for the new password.")
 def change_password(
     payload: ChangePasswordRequest,
     current_user: User = Depends(get_current_user),
@@ -58,7 +63,11 @@ def change_password(
     return {"message": "Password changed successfully"}
 
 
-@router.delete("/me")
+@router.delete(
+    "/me",
+    summary="Delete account",
+    description="Permanently anonymizes PII, revokes all sessions, and deactivates the account. Requires current password.",
+)
 def delete_account(
     payload: DeleteAccountRequest,
     response: Response,

@@ -39,7 +39,12 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str =
             max_age=60 * 60 * 24 * 30 # 30 days
         )
 
-@router.post("/register", response_model=UserRead)
+@router.post(
+    "/register",
+    response_model=UserRead,
+    summary="Create a new account",
+    description="Registers a new user and sends an email verification link. Returns the created user object.",
+)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
     try:
         user = register_user(db=db, email=payload.email, password=payload.password)
@@ -49,7 +54,11 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     
-@router.post("/login")
+@router.post(
+    "/login",
+    summary="Authenticate and receive session cookies",
+    description="Validates credentials and sets `access_token` + `refresh_token` httpOnly cookies.",
+)
 def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
     try:
         access_token, refresh_token = login_user(
@@ -62,7 +71,7 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
 
-@router.post("/logout")
+@router.post("/logout", summary="Invalidate session", description="Revokes the refresh token and clears auth cookies.")
 def logout(response: Response, request: Request, db: Session = Depends(get_db)):
     refresh_token = request.cookies.get("refresh_token")
     if refresh_token:
@@ -72,7 +81,7 @@ def logout(response: Response, request: Request, db: Session = Depends(get_db)):
     response.delete_cookie(key="refresh_token", httponly=True, samesite="lax", secure=settings.ENVIRONMENT == "production")
     return {"message": "Logged out successfully"}
     
-@router.get("/verify-email")
+@router.get("/verify-email", summary="Confirm email address", description="Consumes a single-use verification token and marks the account as verified.")
 def verify_email(token: str, db: Session = Depends(get_db)):
     user_id = consume_email_verification_token(token)
     if not user_id:
@@ -85,7 +94,7 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     return {"message": "Email verified successfully"}
 
 
-@router.post("/resend-verification")
+@router.post("/resend-verification", summary="Re-send verification email")
 def resend_verification(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -97,7 +106,11 @@ def resend_verification(
     return {"message": "Verification email sent"}
 
 
-@router.post("/forgot-password")
+@router.post(
+    "/forgot-password",
+    summary="Request a password reset link",
+    description="Sends a reset link to the given email address. Always returns 200 to prevent email enumeration.",
+)
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
     user = get_user_by_email(db, payload.email)
     if user and user.is_active:
@@ -107,7 +120,7 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     return {"message": "If that email is registered, you'll receive a reset link shortly"}
 
 
-@router.post("/reset-password")
+@router.post("/reset-password", summary="Set a new password using a reset token", description="Single-use token expires after 1 hour.")
 def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
     user_id = consume_password_reset_token(payload.token)
     if not user_id:
@@ -122,7 +135,7 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
     return {"message": "Password reset successfully"}
 
 
-@router.post("/refresh")
+@router.post("/refresh", summary="Rotate access token", description="Issues a new `access_token` cookie using the `refresh_token` cookie. Refresh token is not rotated.")
 def refresh(response: Response, refresh_token: str = Depends(get_refresh_token_from_cookie), db: Session = Depends(get_db)):
     try:
         new_access_token = refresh_access_token(db, raw_refresh_token=refresh_token)
